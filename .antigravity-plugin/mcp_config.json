@@ -2,7 +2,11 @@
   "mcpServers": {
     "context-mode": {
       "command": "node",
-      "args": ["start.mjs"]
+      "args": [
+        "${PLUGIN_ROOT}/server.bundle.mjs",
+        "--agent",
+        "antigravity-cli"
+      ]
     }
   }
 }
