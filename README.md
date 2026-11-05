@@ -60,17 +60,17 @@ Claude Code, Codex, Gemini CLI and Qwen Code install from GitHub, and each of th
 <details id="install-antigravity-cli"><summary><b>Antigravity CLI</b></summary>
 
 ```sh
-npm i -g context-mode
-context-mode setup --agents antigravity-cli
+git clone https://github.com/CesarChris710/context-mode.git
+agy plugin install ./context-mode
 ```
 
 ```sh
 # update
-context-mode upgrade
+git -C context-mode pull && agy plugin install ./context-mode
 # check
-context-mode doctor --agents antigravity-cli
+agy plugin list
 # remove
-context-mode setup --remove --agents antigravity-cli
+agy plugin uninstall context-mode
 ```
 
 Hooks ✓ (hook file) · MCP ✓ · Skills ✓

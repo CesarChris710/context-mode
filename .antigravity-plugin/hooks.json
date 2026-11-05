@@ -1,0 +1,35 @@
+{
+  "context-mode": {
+    "enabled": true,
+    "PreToolUse": [
+      {
+        "matcher": "^(run_command|read_file|grep_search|web_fetch|mcp_context-mode_ctx_.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node hook.mjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(run_command|read_file|grep_search|web_fetch|mcp_context-mode_ctx_.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node hook.mjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node hook.mjs"
+      }
+    ]
+  }
+}

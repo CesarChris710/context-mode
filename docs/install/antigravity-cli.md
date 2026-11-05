@@ -3,45 +3,31 @@
 ## Install
 
 ```sh
-npm i -g context-mode
-context-mode setup --agents antigravity-cli
+git clone https://github.com/CesarChris710/context-mode.git
+agy plugin install ./context-mode
 ```
 
 Update:
 
 ```sh
-context-mode upgrade
+git -C context-mode pull && agy plugin install ./context-mode
 ```
 
-Check: `context-mode doctor`
+Check: `agy plugin list`
 
-Antigravity CLI (`agy`) runs with the official Context Mode v2 adapter. Setup configures the host hooks, MCP server and skills under `~/.gemini/config`.
+Antigravity CLI (`agy`) runs with the official Context Mode v2 adapter as a native Antigravity plugin.
 
-With no terminal (a script or CI), add `--yes`: `context-mode setup --yes --agents antigravity-cli`.
+You can also use the global CLI installer if preferred:
 
-Restart Antigravity CLI after setup.
-
-On Windows the files are `%USERPROFILE%\.gemini\config\mcp_config.json`, `%USERPROFILE%\.gemini\config\hooks.json` and `%USERPROFILE%\.gemini\config\skills`.
-
-To do the setup step by hand, run `context-mode setup --print antigravity-cli` and follow what it prints.
-
-### As an Antigravity Plugin
-
-You can also install Context Mode as a self-contained Antigravity plugin:
-Place the plugin package in `~/.gemini/config/plugins/context-mode` (or your workspace's `.agents/plugins/context-mode`).
-
-## What setup changes
-
-- Adds the `context-mode` server to `~/.gemini/config/mcp_config.json` under `mcpServers`. Other servers stay.
-- Merges the hooks into `~/.gemini/config/hooks.json` under `hooks` as matcher groups (`{matcher, hooks: [...]}`) for PreToolUse, PostToolUse and Stop.
-- Writes the skills `/ctx-doctor`, `/ctx-stats` and `/ctx-upgrade` to `~/.gemini/config/skills/<name>/SKILL.md`.
-- Effect: large shell, read, grep or webfetch calls are denied, and the reason names `ctx_execute` (deny + redirect).
-- Backs up each file first. A failed step is rolled back byte for byte.
+```sh
+npm i -g context-mode
+context-mode setup --agents antigravity-cli
+```
 
 ## Verify
 
 ```sh
-context-mode doctor --agents antigravity-cli
+agy plugin list
 ```
 
 Run `/ctx-doctor` in Antigravity.
@@ -49,7 +35,7 @@ Run `/ctx-doctor` in Antigravity.
 ## Remove
 
 ```sh
-context-mode setup --remove --agents antigravity-cli
+agy plugin uninstall context-mode
 ```
 
-It puts each touched file back. To remove the package too, see [Uninstall](./README.md#uninstall).
+To remove the package if installed globally too, run `context-mode setup --remove --agents antigravity-cli`.

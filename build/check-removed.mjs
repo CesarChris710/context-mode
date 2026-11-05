@@ -116,7 +116,7 @@ const ALLOWED_DIRS = [
   "docs/assets/readme/", // README figures and their sources (D-README-THESIS-1)
   "scripts/release/",
   ".github/",
-  ".claude-plugin/", ".codex-plugin/", ".agents/plugins/",
+  ".claude-plugin/", ".codex-plugin/", ".antigravity-plugin/", ".agents/plugins/",
   MAIN_TREE_PLUGIN_DIR,
 ];
 const ALLOWED_FILES = [

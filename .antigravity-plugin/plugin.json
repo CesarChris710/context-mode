@@ -1,0 +1,18 @@
+{
+  "name": "context-mode",
+  "version": "2.1.3",
+  "description": "Context window saver for Antigravity CLI (agy): sandboxed code execution, FTS5 knowledge base, and session continuity.",
+  "author": {
+    "name": "CesarChris710",
+    "url": "https://github.com/CesarChris710"
+  },
+  "homepage": "https://github.com/CesarChris710/context-mode#readme",
+  "repository": "https://github.com/CesarChris710/context-mode",
+  "license": "Elastic-2.0",
+  "skills": [
+    "./skills/context-mode",
+    "./skills/ctx-doctor",
+    "./skills/ctx-stats",
+    "./skills/ctx-upgrade"
+  ]
+}
