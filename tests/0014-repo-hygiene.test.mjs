@@ -1028,7 +1028,7 @@ describe("ADR-0015 repo: README agent lines", () => {
 
   test("readme-agents: every host row says it has hooks, from its hookChannel in table.ts", () => {
     const rows = agentRows();
-    assert.equal(rows.length, 10);
+    assert.equal(rows.length, ADAPTERS.length);
     for (const r of rows) {
       const a = ADAPTERS.find((x) => x.id === r.id);
       assert.ok(a.hookChannel, `${r.id} has a hookChannel`);
@@ -1098,8 +1098,8 @@ describe("ADR-0015 repo: README agent lines", () => {
   });
 
   test("readme-agents: a hand edit, a missing block or a table back in the README fails the check; --write is stable", () => {
-    const lines = renderAgentLines();
-    const edited = README.replace(lines.codex, lines.codex.replace("Hooks ✓", "Hooks: no"));
+    const blocks = renderAgentBlocks();
+    const edited = README.replace(blocks.codex, blocks.codex.replace("Hooks ✓", "Hooks: no"));
     assert.notEqual(edited, README, "fixture edit did not apply");
     assert.ok(checkAgentLines(edited).some((p) => p.startsWith("codex:")), checkAgentLines(edited).join("\n"));
     const missing = README.replace('id="install-codex">', 'id="install-x">');

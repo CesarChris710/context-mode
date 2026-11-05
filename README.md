@@ -1,6 +1,6 @@
 # Context Mode
 
-**A free, local plugin for 10 coding agents. It keeps tool output out of your agent's context window and keeps all usage data on your machine. The plugin is free forever.**
+**A free, local plugin for 11 coding agents. It keeps tool output out of your agent's context window and keeps all usage data on your machine. The plugin is free forever.**
 
 [![npm downloads](https://img.shields.io/npm/dt/context-mode?label=npm%20downloads)](https://www.npmjs.com/package/context-mode) [![GitHub stars](https://img.shields.io/github/stars/mksglu/context-mode?style=flat&color=yellow)](https://github.com/mksglu/context-mode) [![Discord](https://img.shields.io/discord/1478479412700909750?label=Discord&logo=discord&color=5865f2)](https://discord.gg/DCN9jUgN5v) [![License: ELv2](https://img.shields.io/badge/License-ELv2-blue.svg)](LICENSE)
 
@@ -49,13 +49,33 @@ Starred by engineers at these companies: each name is the company field of 2 or 
 
 ## Install
 
-Pick your agent: [Claude Code](#install-claude-code) · [Codex](#install-codex) · [Gemini CLI](#install-gemini) · [Qwen Code](#install-qwen) · [Pi](#install-pi) · [OpenCode](#install-opencode) · [Copilot CLI](#install-copilot-cli) · [Kiro](#install-kiro) · [VS Code](#install-vscode) · [ZCode](#install-zcode)
+Pick your agent: [Antigravity CLI](#install-antigravity-cli) · [Claude Code](#install-claude-code) · [Codex](#install-codex) · [Gemini CLI](#install-gemini) · [Qwen Code](#install-qwen) · [Pi](#install-pi) · [OpenCode](#install-opencode) · [Copilot CLI](#install-copilot-cli) · [Kiro](#install-kiro) · [VS Code](#install-vscode) · [ZCode](#install-zcode)
 
 Open its block and copy its own install command. Each block also holds the update, check and remove steps, and the [Install guide](https://contextmode.ai/docs/engine/install?utm_source=github&utm_medium=readme&utm_content=install) walks through them.
 
 The plugin needs Node 24.15.0 or later, from the engines field in [package.json](package.json). On Windows, add Git for Windows: the shell tools run in Git Bash, and doctor checks for it.
 contextmode installs as the npm package and command `context-mode`.
 Claude Code, Codex, Gemini CLI and Qwen Code install from GitHub, and each of their commands names the release branch.
+
+<details id="install-antigravity-cli"><summary><b>Antigravity CLI</b></summary>
+
+```sh
+npm i -g context-mode
+context-mode setup --agents antigravity-cli
+```
+
+```sh
+# update
+context-mode upgrade
+# check
+context-mode doctor --agents antigravity-cli
+# remove
+context-mode setup --remove --agents antigravity-cli
+```
+
+Hooks ✓ (hook file) · MCP ✓ · Skills ✓
+
+</details>
 
 <details id="install-claude-code"><summary><b>Claude Code</b></summary>
 
@@ -305,6 +325,7 @@ Run the stats skill right after a prompt. Each agent uses its own command; the s
 
 | Agent | Command |
 |---|---|
+| Antigravity CLI | `Call ctx_stats and show me the report.` |
 | Claude Code | `/ctx-stats` |
 | Codex | `$ctx-stats` |
 | Copilot CLI | `/ctx-stats` |
