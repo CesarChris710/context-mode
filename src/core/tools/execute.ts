@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, parse, resolve } from "node:path";
 import { z } from "zod/v4";
 import {
-  BACKGROUND_REPLY_PREFIX, CANCELLED_LINE, EXEC_LANGUAGES, EXEC_PREVIEW_BYTES, EXEC_TIMEOUT_MS, OUTPUT_CAP, SOURCE_LABEL_MAX_CHARS,
+  BACKGROUND_REPLY_PREFIX, CANCELLED_LINE, EXEC_LANGUAGES, EXEC_PREVIEW_BYTES, EXEC_TIMEOUT_MS, OUTPUT_CAP, SHELL_FAMILY, SOURCE_LABEL_MAX_CHARS,
 } from "../contracts/constants.ts";
 import { CtxError } from "../contracts/errors.ts";
 import type { ExecuteInput, JournalFacts, ToolContext, ToolReply } from "../contracts/types.ts";
@@ -20,6 +20,7 @@ import { buildChildEnv } from "../sandbox/env.ts";
 import { rewriteWindowsBuildTools } from "../sandbox/win-build.ts";
 import { findRuntime, noRuntimeError } from "../sandbox/runtimes.ts";
 import { runProcess, type RunResult } from "../sandbox/spawn.ts";
+import { nodeLaunch } from "../sandbox/host-node.ts";
 import { closeDb, openDb } from "../store/db.ts";
 import { indexText } from "../index/text.ts";
 import { unknownField } from "./search.ts";
@@ -41,7 +42,6 @@ export const ctxExecuteSchema = z.object({
 
 // Interpreter and OS facts (not tunables). A9: runtimes that take code with `-c`; all others get a file.
 // D-M2-T10-7: ".js", not ".mjs": Node's syntax detection runs both require() and import code.
-const SHELL_FAMILY: readonly string[] = Object.freeze(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
 const SCRIPT_EXT: Readonly<Record<string, string>> = Object.freeze({
   javascript: ".js", typescript: ".ts", python: ".py", powershell: ".ps1",
 });
@@ -59,12 +59,12 @@ const SOFT_EXIT = 1;
 // Step 9 (D-M2-T10-2): the background launcher runs through runProcess like any other call. "start"
 // starts itself again detached in "run" mode, prints that pid and exits; "run" leads the new process
 // group, runs the code, then removes the temp dir. The pid names the whole background tree.
-const LAUNCHER = [
+export const LAUNCHER = [
   'const { spawn } = require("node:child_process");',
   'const { rmSync } = require("node:fs");',
   "const [mode, dir, ...argv] = process.argv.slice(1);",
   'if (mode === "start") {',
-  '  const b = spawn(process.execPath, [...process.execArgv, "--", "run", dir, ...argv], { detached: true, stdio: "ignore", windowsHide: true });',
+  '  const b = spawn(process.execPath, [...process.execArgv.filter((a) => a !== "--"), "--", "run", dir, ...argv], { detached: true, stdio: "ignore", windowsHide: true });',
   "  b.unref();",
   "  process.stdout.write(String(b.pid));",
   "} else {",
@@ -203,7 +203,8 @@ async function handler(raw: ExecuteInput, ctx: ToolContext): Promise<ToolReply> 
     }
     // Step 9.
     if (input.background === true) {
-      const r = await runProcess([process.execPath, "-e", LAUNCHER, "--", "start", tmpDir ?? "", ...argv], { cwd, env, signal: ctx.signal, timeoutMs });
+      const node = nodeLaunch(env); // D-R44-OC-HOSTNODE-1: a Bun host's execPath is the host binary
+      const r = await runProcess([node.file, "-e", LAUNCHER, "--", "start", tmpDir ?? "", ...argv], { cwd, env: node.env, signal: ctx.signal, timeoutMs });
       const pid = r.stdout.toString("utf8");
       if (r.exitCode !== 0 || pid === "" || !Number.isSafeInteger(Number(pid))) return fail(spawnFailed(argv[0], cwd), journal);
       handedOff = true;

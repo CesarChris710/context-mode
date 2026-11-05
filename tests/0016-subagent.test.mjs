@@ -196,6 +196,22 @@ describe("ADR-0016: subagent policy cases", { concurrency: CONC }, () => {
   });
 });
 
+// #1319 (Claude Code auto mode): v1 added a block to every Agent prompt, and a resend got it again, so auto mode
+// never approved the call. v2 never edits the Agent input: the hook answers with no output, first call and resend alike.
+describe("ADR-0016: Agent input is never changed (#1319)", { concurrency: CONC }, () => {
+  test("claude-code PreToolUse Agent: no output on the first call and on the resend", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "cm-1319-"));
+    const env = { HOME: home, USERPROFILE: home, PATH: process.env.PATH, CLAUDE_PROJECT_DIR: home };
+    const payload = { hook_event_name: "PreToolUse", session_id: "s-1319", cwd: home, tool_name: "Agent",
+      tool_input: { description: "d", prompt: "look at the repo", subagent_type: "general-purpose" } };
+    try {
+      for (let i = 0; i < 2; i++) assert.deepEqual(await handleHook("claude-code", payload, env), { stdout: "", exitCode: 0 });
+    } finally {
+      rmSync(home, { recursive: true, force: true, maxRetries: 3 });
+    }
+  });
+});
+
 describe("ADR-0016: run wrapper", { concurrency: CONC }, () => {
   // Each case runs the real entry as a child process in a temp git repo with a temp HOME.
   const ENTRY = resolve(fileURLToPath(import.meta.url), "../../src/entries/run.ts");
@@ -321,9 +337,11 @@ describe("ADR-0016: vscode project resolution", () => {
   });
   after(() => { process.env.HOME = oldHome; rmSync(root, { recursive: true, force: true, maxRetries: 3 }); });
 
-  test("H1: setup writes the VS Code MCP args with --workspace-folder ${workspaceFolder}", () => {
+  // D-VSCODE-ROOTS-1: the user mcp.json has no folder scope, so ${workspaceFolder} there stops the server from starting.
+  // Setup writes no workspace arg; the server reads the workspace from MCP roots/list.
+  test("H1: setup writes the VS Code MCP args with no ${workspaceFolder} (user scope cannot expand it)", () => {
     const row = buildRegistry({ home: "/h", pkgDir: "/abs/pkg", env: {} }).find((r) => r.id === "vscode");
-    assert.deepEqual(row.config.value.args, [path.join("/abs/pkg", "server.mjs"), "--agent", "vscode", "--workspace-folder", "${workspaceFolder}"]);
+    assert.deepEqual(row.config.value.args, [path.join("/abs/pkg", "server.mjs"), "--agent", "vscode"]);
   });
 
   test("H1: the VS Code shell tools are run_in_terminal, runTerminalCommand, bash, powershell (D-N7-VSCODE-TOOLS-1)", () => {

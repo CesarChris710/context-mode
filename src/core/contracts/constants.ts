@@ -129,6 +129,8 @@ export const WORKSPACE_FOLDER_FLAG = "--workspace-folder"; // DEVIATIONS D-M1-5:
 
 // Sandbox and tools-exec (M2; impl/03 §2 step 3, §6 step 5; impl/04 §2.1, §2.3 steps 9, 11, 15)
 export const EXEC_LANGUAGES = Object.freeze(["shell", "powershell", "javascript", "typescript", "python"] as const); // impl/04 §2.1, A9: named runtimes; any PATH runtime is also accepted
+// A9: runtimes that take code with `-c`. D-DENY-SHELL-LANG-1: a ctx_execute language of this family (or "shell") gets the Bash deny rules.
+export const SHELL_FAMILY: readonly string[] = Object.freeze(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
 export const PATHEXT_DEFAULT = ".COM;.EXE;.BAT;.CMD"; // impl/03 §2 step 3: Windows PATHEXT when the env var is unset
 export const FETCH_MAX_HOPS = 5; // impl/03 §6 step 5: redirect hops; one more is FETCH_FAILED
 export const SOURCE_LABEL_MAX_CHARS = 80; // impl/04 §2.3 step 15, §4 step 7: label = "<tool>:" + first line of the code, at most 80 chars
@@ -153,6 +155,7 @@ export const HOST_SESSION_ENV: Readonly<Partial<Record<string, string>>> = Objec
 // Runtime
 export const NODE_MIN = "24.15.0"; // S-NODE
 export const DATA_ROOT = "~/.context-mode"; // PRD §4; the store module expands "~"
+export const DATA_DIR_ENV = "CONTEXT_MODE_DATA_DIR"; // #1318 D-DATA-DIR-ENV-1: set and not empty, it replaces DATA_ROOT for every read and write
 export const INTERNAL_ERROR_LINE = "Internal error. Fix: run ctx_doctor."; // impl/11 §5 step 7d, §7 table
 export const REQUIRE_SECURITY_ENV = "CONTEXT_MODE_REQUIRE_SECURITY"; // v1 issue #468; DECISIONS-r9 E2
 
@@ -303,7 +306,8 @@ export const SED_COMMAND = "sed";
 export const SED_QUIET_FLAGS = Object.freeze(["-n", "--quiet", "--silent"] as const); // "sed -n" only
 export const JQ_COMMAND = "jq"; // a dump only with the identity filter (D-M3-E4-7)
 // impl/08 §6.1 step 6: Read input path key per host shape (Claude file_path, Gemini/Qwen absolute_path, path). D-M3-E4-4.
-export const READ_PATH_KEYS = Object.freeze(["file_path", "absolute_path", "path"] as const);
+export const READ_PATH_KEYS = Object.freeze(["file_path", "absolute_path", "path", "filePath"] as const); // filePath: OpenCode (D-R44-OC-READ-1)
+export const READ_PATH_LIST_KEY = "filePaths"; // OpenCode 2 multi-read: an array of paths (D-R44-OC-READ-1)
 
 // impl/09 §4 hooks dispatch (DEVIATIONS D-M3-H2-1..6). Keys and texts the dispatch reads; no numbers.
 export const OWN_TOOL_PREFIX = "ctx_"; // §4.6 step 1: canonical names of this server's own tools
@@ -324,6 +328,7 @@ export const RECALL_MIN_SCORE = 5;
 export const RECALL_MAX_ROWS = 340; // newest rows read per prompt (= MAX_CANDIDATES_TOTAL)
 export const COMPACTED_META_PREFIX = "compacted:"; // meta key + session id: a compaction happened in this session
 export const RECALL_UNITS_SEEN_META_PREFIX = "recall_units_seen:"; // r3-ledger: JSON "source:ord" list of line units already injected
+export const UNITS_ANCESTOR_FACTOR = 8; // D-UNITS-BOUND-1: ancestor copies per output <= this x its bytes (0 of 680k units in 3520 real files drop a parent at 8)
 export const RECALL_UNIT_CANDIDATES = 64; // r3-ledger: line units read per recall query (one ranked FTS query)
 export const RECALL_SEEN_META_PREFIX = "recall_seen:"; // meta key + session id: JSON seq list already injected
 export const RECALL_OPEN_TAG = "<context_mode_recall>";
@@ -566,7 +571,6 @@ export const UPGRADE_MODES = Object.freeze(["upgrade", "uninstall"] as const); /
 export const UPGRADE_TABLE_HEADER = "| Area | Before | After |";
 export const UPGRADE_TABLE_RULE = "|---|---|---|";
 export const UPGRADE_PLUGIN_ROOT_AREA = "plugin root"; // step 0: resolvePluginRoot vs the running bundle dir
-export const UPGRADE_CHECKOUT_AREA = "plugin checkout"; // step 4 git checkout (pi, opencode)
 export const UPGRADE_SERVER_AREA = "server"; // uninstall step 1
 export const UPGRADE_SERVER_RUNNING = "running";
 export const UPGRADE_SERVER_STOPPED = "stopped after this reply";
@@ -577,19 +581,17 @@ export const UPGRADE_REPORT_ONLY = "report only: remove it by hand if you no lon
 export const UPGRADE_STOP_DELAY_MS = 200; // uninstall: SIGTERM to self (server entry only) after the reply is written
 export const UPGRADE_AREA_KEY_SEP = ": "; // area cell: <file>: <key path>
 export const V1_KEY_PATH_SEP = "."; // V1Finding.path / HostConfigEdit.path segment separator
-export const UPGRADE_GIT_TIMEOUT_MS = 120000; // git clone of the release branch
+export const UPGRADE_GIT_TIMEOUT_MS = 120000; // release smoke: one git step
 export const GIT_CLONE_ARGS = Object.freeze(["clone", "--depth", "1", "--branch"] as const); // + RELEASE_BRANCH, url, dir
 export const GIT_HEAD_SHA_ARGS = Object.freeze(["rev-parse", "HEAD"] as const);
 export const UPGRADE_FETCH_DIR_PREFIX = ".fetch-"; // <DATA_ROOT>/plugins/<agent>/.fetch-<pid> before rename to <sha>
 export const SUMS_LINE_SEP = "  "; // SHA256SUMS line: "<hex>  <relative/path>" (impl/13 §4)
 export const SUMS_HASH_ALGORITHM = "sha256";
-export const UPGRADE_GIT_CHECKOUT_AGENTS: readonly AgentId[] = Object.freeze<AgentId[]>(["pi", "opencode"]); // impl/07 §6 step 4 "plugin" (git checkout)
-export const UPGRADE_HOST_MANUAL = "update with the host's own install command, then restart"; // no UPGRADE_HOST_COMMAND row (D-M5-U1-2)
 export const UPGRADE_CONFIG_AREA = "host config"; // uninstall step 3 when no own entry exists
 export const UPGRADE_OWN_ENTRY = "context-mode entry"; // uninstall step 3 "before" cell
 export const UPGRADE_CACHE_BY_HAND = "remove the release dir by hand: its place is your choice"; // config-entry installs (D-M5-U1-3)
 export const GIT_NO_PROMPT_ENV: Readonly<Record<string, string>> = Object.freeze({ GIT_TERMINAL_PROMPT: "0" }); // never wait on a credential prompt
-// D-M7-CI-1: release-fetch sets core.autocrlf=false by env (argv stays as the spec), so clone bytes match SHA256SUMS.
+// D-M7-CI-1: a git child gets core.autocrlf=false by env (argv stays as the spec), so clone bytes match SHA256SUMS.
 export const GIT_NO_CRLF_ENV: Readonly<Record<string, string>> = Object.freeze({ GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.autocrlf", GIT_CONFIG_VALUE_0: "false" });
 export const GIT_NOT_STARTED = "git did not start"; // FETCH_FAILED <code> when git is not on PATH
 export const GIT_BIN = "git";
@@ -599,6 +601,14 @@ export const WIN_SHELL_LANGS: readonly string[] = Object.freeze(["shell", "bash"
 export const GIT_BASH_RELATIVE: readonly (readonly string[])[] = Object.freeze([["..", "bin", "bash.exe"], ["..", "..", "bin", "bash.exe"]]);
 export const GIT_EXIT_LABEL = "git exit "; // FETCH_FAILED <code>: git exit <n>: <stderr>
 export const UPGRADE_TRASH_SUFFIX = ".ctx-upgrade-removing"; // a removed path is renamed here first, deleted on commit (rollback)
+// D-SEC-V1-ASIDE-1 (owner rule: never delete user data): an old v1 data dir is moved to <dir>UPGRADE_ASIDE_SUFFIX and kept
+// after commit; a second run picks <dir>UPGRADE_ASIDE_SUFFIX-<n>, so an earlier copy stays too.
+export const UPGRADE_ASIDE_SUFFIX = ".ctx-v1-old";
+export const UPGRADE_MOVED_ASIDE = "moved aside to "; // + the kept path, the After cell of a data dir row
+// D-SEC-PERSIST-1: Claude Code keeps a large tool output at <claude dir>/projects/<project>/<session>/tool-results/<file>.
+// The hook reads such a file only at exactly that place for its own session, and only up to this many bytes.
+export const CLAUDE_TOOL_RESULTS_DIR_NAME = "tool-results";
+export const PERSISTED_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
 export const TABLE_ROW_START = "| ";
 export const TABLE_CELL_SEP = " | ";
 export const TABLE_ROW_END = " |";
@@ -610,7 +620,7 @@ export const TOML_TABLE_CLOSE = "]";
 // stay thin handlers that call these.
 export const OPS_SPLIT_FILES = Object.freeze([
   "doctor-env.ts", "doctor-config.ts", "doctor-hook.ts", "doctor-db.ts", "doctor-heal.ts",
-  "release-fetch.ts", "verify-sums.ts", "plugin-swap.ts", "host-write.ts", "v1-remove.ts", "uninstall.ts",
+  "verify-sums.ts", "plugin-swap.ts", "host-write.ts", "v1-remove.ts", "uninstall.ts",
 ] as const);
 // doctor-env.ts: D1 version, D2 Node and node:sqlite, D6 MCP (impl/07 §5).
 export const SQLITE_MODULE = "node:sqlite"; // D2: await import(SQLITE_MODULE)
@@ -699,15 +709,23 @@ export const PLUGIN_LINK_TYPE_WIN32 = "junction"; // on win32 a dir symlink need
 // uninstall.ts: stop marker read by the owning server (impl/07 uninstall step 1, impl/02 §7).
 export const OWNER_STOP_EXT = ".stop"; // <projectDir>/owners/<serverId>.stop next to <serverId>.pid
 export const UPGRADE_DATA_DELETED = "user data deleted"; // uninstall step 4 with confirmDelete
-// ADR-0011 "Release steps" c): host update commands for host-managed agents. Copilot CLI: "test first" (no command yet).
-export const UPGRADE_HOST_COMMAND: Readonly<Partial<Record<AgentId, string>>> = Object.freeze({
+// D-R44-UPGRADE-NATIVE-1 (#1309, host audit pi-2 qwen-1 codex-2): ctx_upgrade prints each agent's own update command.
+// No agent clones a branch: the agent's own updater (or npm for the setup-route agents) fetches the latest release.
+export const UPGRADE_HOST_COMMAND: Readonly<Record<AgentId, string>> = Object.freeze({
   "claude-code": "claude plugin marketplace update context-mode && claude plugin update context-mode@context-mode",
-  codex: "rewrite config.toml's [mcp_servers.context-mode*] block to the v2 entry, then restart Codex",
-  gemini: "gemini extensions install https://github.com/mksglu/context-mode --auto-update",
-  qwen: "qwen extensions install https://github.com/mksglu/context-mode --auto-update",
+  codex: "codex plugin marketplace upgrade context-mode",
+  gemini: "gemini extensions update context-mode",
+  qwen: "qwen extensions update context-mode",
+  pi: "pi update --extensions",
+  opencode: "opencode plugin update",
+  "copilot-cli": "npm i -g context-mode && context-mode setup --agents copilot-cli",
+  vscode: "npm i -g context-mode && context-mode setup --agents vscode",
+  kiro: "npm i -g context-mode && context-mode setup --agents kiro",
+  zcode: "npm i -g context-mode && context-mode setup --agents zcode",
 });
-export const PI_GIT_PACKAGE = "git:github.com/mksglu/context-mode@release"; // ADR-0011 Pi row
-export const OPENCODE_GIT_SPEC = "git+https://github.com/mksglu/context-mode.git#release"; // ADR-0011 OpenCode row
+// Old install forms, kept so uninstall and doctor still find and remove them (ADR-0011 Pi and OpenCode rows).
+export const PI_GIT_PACKAGE = "git:github.com/mksglu/context-mode@release"; // old Pi git entry (uninstall removes it)
+export const OPENCODE_GIT_SPEC = "git+https://github.com/mksglu/context-mode.git#release"; // old OpenCode git entry (uninstall removes it)
 
 // v1 footprint names (ADR-0011 "v1 cleanup"; impl/07 §3). Script names are the v1 hooks/**/*.mjs event scripts.
 export const V1_SCRIPT_NAMES = Object.freeze([
@@ -738,6 +756,7 @@ export const HOOKS_JSON_FILE = "hooks.json"; // codex, zcode cli/
 export const CLAUDE_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"; // D-WF-CC-CONFIG-1: Claude Code user dir override (default ~/.claude)
 export const CODEX_HOME_ENV = "CODEX_HOME"; // D-N6-CODEX-HOME-2: Codex reads config.toml and hooks.json from here (default ~/.codex)
 export const COPILOT_HOME_ENV = "COPILOT_HOME"; // D-WIN-COPILOT-HOME-1: Copilot CLI replaces ~/.copilot as a whole with it (hooks/, skills/)
+export const GEMINI_CLI_HOME_ENV = "GEMINI_CLI_HOME"; // D-R38-GEMINI-HOME-1: gemini-cli homedir() reads it before os.homedir(); <it>/.gemini holds settings.json and extensions/
 export const KIRO_HOME_ENV = "KIRO_HOME"; // D-WIN-KIRO-HOME-1: Kiro CLI V3 global dir override (hooks/, settings/mcp.json, skills/, agents/); default ~/.kiro
 export const OPENCODE_CONFIG_DIR_ENV = "OPENCODE_CONFIG_DIR"; // D-WIN-OPENCODE-DIR-1: OpenCode custom config dir (opencode.json, skills/)
 export const APPDATA_ENV = "APPDATA"; // D-WIN-VSCODE-MCP-1: Windows roaming app data; VS Code keeps its user dir under it
@@ -766,8 +785,14 @@ export const STATUS_LINE_KEY = "statusLine";
 export const PI_PACKAGES_KEY = "packages";
 export const OPENCODE_PLUGIN_KEY = "plugin";
 export const OPENCODE_PLUGINS_KEY = "plugins"; // D-OC2-D3-PLUGINS-1: `opencode plugin add context-mode` on OpenCode 2.x writes this key (#1307)
+export const OPENCODE_MCP_COMMAND_FIELD = "command"; // D-R44-OC-D3-1: OpenCode local MCP entry: command is the whole argv array
 export const OPENCODE_PACKAGE_FIELD = "package"; // D-OC2-D3-PLUGINS-1: an object entry {"package": "context-mode@2.0.1"} in the list (#1307)
 export const OPENCODE_NPM_SPEC_PREFIX = `${SERVER_KEY}@`; // D-OC2-D3-PLUGINS-1: the npm spec form "context-mode@2.0.1" / "context-mode@latest"
+export const NPM_VERSION_SEP = "@"; // npm spec "<name>@<version or tag>"
+// D-R44-UPGRADE-NATIVE-1 (#1309, host audit pi-2): the npm entry that replaces an old release-branch entry. The
+// "latest" tag keeps it apart from the bare v1 form, and the agent's own updater follows it to each new release.
+export const OPENCODE_NPM_LATEST = `${OPENCODE_NPM_SPEC_PREFIX}latest`; // "context-mode@latest"
+export const PI_NPM_LATEST = `${V1_PI_PACKAGE}${NPM_VERSION_SEP}latest`; // "npm:context-mode@latest"
 export const V1_DATA_DIR_NAME = "context-mode"; // <agent home>/context-mode/
 // detectV1 (impl/07 §3; DEVIATIONS D-M5-O2-1..3). v1 wrote only these entries under ~/.context-mode/ (v1 main:
 // "content" dir, "platform.json"); v2 shares the dir (DATA_ROOT), so only these names are v1 content.
@@ -800,16 +825,22 @@ export const V1_REASON = Object.freeze({
   kiroSteering: "old context-mode Kiro steering doc .kiro/steering/KIRO.md: manual review, report only, never removed",
   piNpm: "old context-mode Pi package npm:context-mode",
   opencodePlugin: "old context-mode OpenCode plugin spec context-mode",
+  piGit: "old context-mode Pi entry git:github.com/mksglu/context-mode@release: ctx_upgrade replaces it with npm:context-mode@latest",
+  opencodeGit: "old context-mode OpenCode entry git+https://github.com/mksglu/context-mode.git#release: ctx_upgrade replaces it with context-mode@latest",
   zcodeHook: "old context-mode ZCode hook entry: command contains context-mode hook",
   dataDir: "old context-mode data dir <agent home>/context-mode/",
   dataDirShared: "old context-mode data dir ~/.gemini/context-mode/: delete only after a prompt (Antigravity shares it)",
   dataRoot: "old context-mode content under ~/.context-mode/",
   tmpFile: "old context-mode temp file context-mode-* under the OS temp dir: report only, safe to keep",
+  projectLink: "context-mode path in the project reached through a link: report only, upgrade keeps it as is and never follows a link",
 } as const);
 // ADR-0011 "reported with a fix, not removed" rows, Gemini data "only after a prompt" (a tool cannot prompt), and
 // tmp context-mode-* (a live v1 server may own them), and the Kiro steering doc (A37: manual review): report only
-// (D-M5-U1-4, D-M5-U1-5, D-M7-V2-2).
-export const UPGRADE_REPORT_ONLY_REASONS: readonly string[] = Object.freeze<string[]>([V1_REASON.statusLine, V1_REASON.vscodeMcp, V1_REASON.dataDirShared, V1_REASON.tmpFile, V1_REASON.kiroSteering]);
+// (D-M5-U1-4, D-M5-U1-5, D-M7-V2-2). Old release-branch entries: ctx_upgrade step 5 swaps them for the npm spec
+// before v1 removal, so removal never cuts them (D-R44-DOCTOR-D4-GIT-1).
+export const UPGRADE_REPORT_ONLY_REASONS: readonly string[] = Object.freeze<string[]>([V1_REASON.statusLine, V1_REASON.vscodeMcp, V1_REASON.dataDirShared, V1_REASON.tmpFile, V1_REASON.kiroSteering, V1_REASON.piGit, V1_REASON.opencodeGit, V1_REASON.projectLink]);
+// D-SEC-V1-ASIDE-1: these whole-dir findings hold user data: moved aside and kept, never deleted.
+export const UPGRADE_KEEP_ASIDE_REASONS: readonly string[] = Object.freeze<string[]>([V1_REASON.dataDir, V1_REASON.dataRoot]);
 
 // Pi / OpenCode in-process entries (impl/12 §3.1 A21, §4.1 A28, §4.4 step 1).
 export const PLUGIN_ID = SERVER_KEY;
@@ -819,6 +850,7 @@ export const OPENCODE_TOOL_PREFIX = SERVER_KEY + "_";
 // ops/plugin-root.ts, ops/host-config.ts (impl/07 §1-§2; DEVIATIONS D-M5-O1-1..3).
 export const SERVER_ENTRY_FILE = "server.mjs"; // the MCP server bundle next to hook.mjs in the release root
 export const VSCODE_WORKSPACE_VAR = "${workspaceFolder}"; // VS Code expands it in MCP server args (D-HF-VSCODE-PROJECT-1)
+export const ROOTS_TIMEOUT_MS = 2000; // D-VSCODE-ROOTS-1: one roots/list round trip to the host, then the call goes on without it
 export const OPENCODE_PLUGIN_PATH: readonly string[] = Object.freeze(["opencode", "plugin.js"]); // under the package dir (D-WIN-OCENTRY-1)
 export const HOST_NODE_COMMAND = "node"; // MCP entry `command`
 export const EXE_SUFFIX = ".exe"; // Windows node: "C:\\Program Files\\nodejs\\node.exe" (D-VT-DOCTOR-CMD-1)
@@ -941,7 +973,7 @@ export const NATIVE_INSTALL: Readonly<Record<string, readonly string[]>> = Objec
   "copilot-cli": ["npm i -g context-mode", "context-mode setup --agents copilot-cli"],
   vscode: ["npm i -g context-mode", "context-mode setup --agents vscode"],
   kiro: ["npm i -g context-mode", "context-mode setup --agents kiro"],
-  zcode: ["npm i -g context-mode", "context-mode setup --agents zcode"],
+  zcode: ["zcode plugins marketplace add mksglu/context-mode", "zcode plugins install context-mode@context-mode"],
 });
 export const ISSUE_FORM_URL = `https://github.com/${ISSUE_REPO_SLUG}/issues/new?template=${ISSUE_FORM_FILE}`; // + &title=&summary=
 export const DOCTOR_GIT_VERSION_TIMEOUT_MS = 5000; // git --version for the report file only

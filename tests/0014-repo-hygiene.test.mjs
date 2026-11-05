@@ -1082,7 +1082,8 @@ describe("ADR-0015 repo: README agent lines", () => {
     assert.ok(by.codex.includes("codex plugin add"), by.codex);
     assert.ok(by.gemini.includes("gemini extensions install"), by.gemini);
     assert.ok(by.pi.includes("pi install"), by.pi);
-    for (const id of ["copilot-cli", "kiro", "vscode", "zcode"]) assert.ok(by[id].includes("context-mode setup"), by[id]);
+    for (const id of ["copilot-cli", "kiro", "vscode"]) assert.ok(by[id].includes("context-mode setup"), by[id]);
+    assert.ok(by.zcode.includes("zcode plugins install"), by.zcode);
   });
 
   test("readme-agents: the install cell holds every command of the page's native fence, joined by <br> (D-README-INSTALL-CELL-1)", () => {
@@ -1810,7 +1811,7 @@ describe("ADR-0015 repo: README thesis, links and figures (D-README-THESIS-1)", 
     for (const need of ["We ran the real binary", "Hooks reach each agent in one of three ways", "HOOKS-FIRE.md", "ADR-0023"]) assert.ok(proof.includes(need), `proof block lacks ${need}`);
     const sec = readme.slice(readme.indexOf("\n## Security and privacy\n"), readme.indexOf("\n## Context Mode Gateway\n"));
     assert.ok(sec.includes("\n| Call | When | File |\n"), "network calls are a table");
-    for (const f of ["src/core/sandbox/fetch.ts", "src/core/ops/doctor-env.ts", "src/core/ops/release-fetch.ts", "src/cli/commands.ts"]) assert.ok(sec.includes(`](${f})`), `Security links ${f}`);
+    for (const f of ["src/core/sandbox/fetch.ts", "src/core/ops/doctor-env.ts", "src/cli/commands.ts"]) assert.ok(sec.includes(`](${f})`), `Security links ${f}`);
     for (const line of sec.split("\n")) if (!line.startsWith("|")) assert.ok(line.split("`").length - 1 < 6, `Security line holds 3 or more inline-code spans: ${line.slice(0, 100)}`);
     const gw = readme.slice(readme.indexOf("\n## Context Mode Gateway\n"), readme.indexOf("\n## License\n"));
     assert.ok(gw.includes("\nAdd the Gateway when you want "), "the Gateway section says when to add it");

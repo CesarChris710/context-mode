@@ -71,7 +71,7 @@ describe("ADR-0020 adapters", () => {
       kiro: { shell: ["execute_bash", "execute_pwsh", "shell"] }, // D-HF-KIRO-SHELL-1, D-N7-KIRO-1
       zcode: CLAUDE_NATIVE,
       pi: { shell: ["bash", "powershell"], read: ["read"] }, // D-HA-PI-NAMES-1, D-R38-PI-PWSH-1
-      opencode: { shell: ["bash"] }, // D-HF-OPENCODE-SHELL-1
+      opencode: { shell: ["bash"], read: ["read"] }, // D-HF-OPENCODE-SHELL-1, D-R44-OC-READ-1
       "antigravity-cli": { shell: ["run_command"], read: ["read_file"], grep: ["grep_search"], webfetch: ["web_fetch"] },
     };
 
@@ -348,7 +348,7 @@ describe("ADR-0020 adapters", () => {
       assert.deepEqual(getAdapter("pi").nativeTools, { shell: ["bash", "powershell"], read: ["read"] }); // D-HA-PI-NAMES-1, D-R38-PI-PWSH-1
       assert.deepEqual(getAdapter("vscode").nativeTools, { shell: ["run_in_terminal", "runTerminalCommand", "bash", "powershell"], read: ["read_file", "view"], webfetch: ["fetch_webpage", "web_fetch"] }); // D-HF-VSCODE-PROJECT-1, D-N7-VSCODE-TOOLS-1
       assert.deepEqual(getAdapter("kiro").nativeTools, { shell: ["execute_bash", "execute_pwsh", "shell"] }); // D-HF-KIRO-SHELL-1, D-N7-KIRO-1
-      assert.deepEqual(getAdapter("opencode").nativeTools, { shell: ["bash"] }); // D-HF-OPENCODE-SHELL-1
+      assert.deepEqual(getAdapter("opencode").nativeTools, { shell: ["bash"], read: ["read"] }); // D-HF-OPENCODE-SHELL-1, D-R44-OC-READ-1
       for (const r of ADAPTERS) assert.equal(r.execReadOnlyHint, r.id === "codex", r.id);
     });
 
@@ -1108,9 +1108,12 @@ describe("ADR-0020 adapters", () => {
       // D-HA-GEMINI-REPLACE-1: a string llmContent is the text the model sees, so it is the result text.
       const text = FX.AfterTool.tool_response.llmContent;
       assert.deepEqual(ok.result, { isError: false, bytes: Buffer.byteLength(text), text });
-      const parts = { llmContent: [{ text: "a" }], returnDisplay: "a" };
-      const pj = JSON.stringify(parts);
-      assert.deepEqual(decode({ ...FX.AfterTool, tool_response: parts }).result, { isError: false, bytes: Buffer.byteLength(pj), text: pj });
+      // D-R38-GEMINI-PARTS-1: a text-only Part list is the joined text; a Part list with a non-text Part stays JSON text.
+      const parts = { llmContent: [{ text: "a" }, { text: "b" }], returnDisplay: "ab" };
+      assert.deepEqual(decode({ ...FX.AfterTool, tool_response: parts }).result, { isError: false, bytes: 2, text: "ab" });
+      const mixed = { llmContent: [{ text: "a" }, { inlineData: { mimeType: "image/png", data: "x" } }], returnDisplay: "a" };
+      const mj = JSON.stringify(mixed);
+      assert.deepEqual(decode({ ...FX.AfterTool, tool_response: mixed }).result, { isError: false, bytes: Buffer.byteLength(mj), text: mj });
       const bad = decode({ ...FX.AfterTool, tool_response: { llmContent: "", returnDisplay: "", error: { message: "boom" } } });
       assert.equal(bad.result.isError, true);
       const nullErr = decode({ ...FX.AfterTool, tool_response: { llmContent: "x", error: null } });
@@ -1172,9 +1175,38 @@ describe("ADR-0020 adapters", () => {
 
     // gemini-cli 0.65.0 docs/hooks/reference.md AfterTool: decision "deny" + reason, the reason replaces the tool result
     // sent to the model (D-HA-GEMINI-REPLACE-1). BeforeTool has no replace.
-    test("encode replace on AfterTool is decision deny with the output as reason; no-op on BeforeTool", () => {
-      assert.deepEqual(encode(ev("PostToolUse"), { kind: "replace", output: "x" }), { stdout: JSON.stringify({ decision: "deny", reason: "x" }), exitCode: 0 });
+    test("encode replace on AfterTool is decision deny with the success line, then the output, as reason; no-op on BeforeTool", () => {
+      assert.deepEqual(encode(ev("PostToolUse"), { kind: "replace", output: "x" }), { stdout: JSON.stringify({ decision: "deny", reason: __m2.GEMINI_REPLACE_LEAD + "x" }), exitCode: 0 });
       assert.deepEqual(encode(ev("PreToolUse"), { kind: "replace", output: "x" }), { stdout: "", exitCode: 0 });
+    });
+
+    // D-R38-GEMINI-REPLACE-OK-1 (host audit gemini-4): gemini-cli 0.67.0 (bundle chunk-LAR4JEC7.js:347903-347912) turns an
+    // AfterTool deny into llmContent "Tool result blocked: <reason>" with error execution_failed. The text the model sees
+    // must say first that the tool ran and succeeded, then carry the output.
+    test("replace through the host AfterTool path: the model reads that the tool succeeded, then the output", () => {
+      const reply = JSON.parse(encode(ev("PostToolUse"), { kind: "replace", output: "line 1\nline 2" }).stdout);
+      const hostLlmContent = `Tool result blocked: ${reply.reason}`; // the host's own template
+      const first = hostLlmContent.split("\n")[0];
+      assert.ok(first.startsWith("Tool result blocked: the tool ran and succeeded"), first);
+      assert.ok(hostLlmContent.endsWith("line 1\nline 2"));
+    });
+
+    // D-R38-GEMINI-URL-1 (host audit gemini-5): web_fetch takes only prompt; the first URL in it is the policy's url.
+    test("decode web_fetch sets url from the first URL in prompt; a given url and a prompt with no URL stay as is", () => {
+      const wf = (input) => decode({ ...FX.BeforeTool, tool_name: "web_fetch", tool_input: input }).tool.input;
+      assert.equal(wf({ prompt: "summarize https://example.com/a?b=1, then (http://x.test)" }).url, "https://example.com/a?b=1");
+      assert.equal(wf({ prompt: "see (HTTPS://Example.com/p)." }).url, "HTTPS://Example.com/p");
+      assert.deepEqual(wf({ prompt: "no link here" }), { prompt: "no link here" });
+      assert.equal(wf({ prompt: "https://a.test", url: "https://b.test" }).url, "https://b.test");
+      assert.equal(decode({ ...FX.BeforeTool, tool_name: "run_shell_command", tool_input: { prompt: "https://a.test" } }).tool.input.url, undefined);
+    });
+
+    // D-R38-GEMINI-PARTS-1 (host audit gemini-6): read_many_files names its files in include; they are the replace query.
+    test("decode read_many_files takes file_path from include for the replace query", () => {
+      const rm = (input) => decode({ ...FX.AfterTool, tool_name: "read_many_files", tool_input: input }).tool.input;
+      assert.equal(rm({ include: ["src/a.ts", "docs/*.md"] }).file_path, "src/a.ts docs/*.md");
+      assert.deepEqual(rm({ include: [] }), { include: [] });
+      assert.equal(rm({ include: ["x"], file_path: "y" }).file_path, "y");
     });
 
     test("GP3 synthetic round trip: every payload decodes and encodes allow to the native empty shape", () => {
@@ -1792,6 +1824,13 @@ describe("ADR-0020 adapters", () => {
 
     test("own prefix is the documented mcp__<server>__<tool> name with the hyphen kept (D-N7-ZCODE-NAMES-1)", () => {
       assert.equal(TOOL_NAME_PREFIX, "mcp__context-mode__");
+    });
+
+    // D-R44-ZCODE-NATIVE-1: a plugin MCP server reaches the model as mcp__plugin_<plugin>_<server>__<tool>.
+    test("decode maps the zcode plugin tool prefix to bare ctx_* and keeps the settings-server prefix as before", () => {
+      const ev = decode({ ...base, hook_event_name: "PreToolUse", tool_name: "mcp__plugin_context-mode_context-mode__ctx_search", tool_input: { queries: ["a"] } });
+      assert.equal(ev.tool.canonicalName, "ctx_search");
+      assert.equal(decode({ ...base, hook_event_name: "PreToolUse", tool_name: "mcp__context-mode__ctx_search", tool_input: {} }).tool.canonicalName, "ctx_search");
     });
 
     test("decode SessionStart: source passes through when present, else undefined (impl/10 §9)", () => {

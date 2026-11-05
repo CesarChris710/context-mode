@@ -11,6 +11,8 @@ import path from "node:path";
 import ts from "typescript";
 import { ADAPTERS } from "../src/adapters/table.ts";
 import { TOOL_ORDER } from "../src/core/contracts/constants.ts";
+import { OVERHEAD_P95_MS } from "../src/setup/engine.ts";
+import { hookCommandString, stableNodePath, SETUP_NODE } from "../src/setup/registry.ts";
 import { qwenHooksOff } from "../src/setup/qwen-gate.ts";
 import { hookHashOf, pluginTrustEntries } from "../src/setup/codex-trust.ts";
 import { assertWritable, buildRegistry, hostBin, installExitOk, pathEntries, runDoctor, runRemove, runSetup, spawnForm, spawnShim, whichBin, winCmdLine, LOCK_FILE, BACKUP_DIR, shellWord } from "../src/setup/index.ts";
@@ -25,7 +27,7 @@ describe("ADR-0019 section 3: setup engine (setup, doctor, remove, spawn, lock, 
   // initialize + tools/list, hook.mjs answers a hook call), fake agent binaries on a temp PATH.
 
 
-  const NODE = process.execPath;
+  const NODE = SETUP_NODE; // D-STABLE-NODE-1: the node setup writes
 
   function fakePkg(root, { tools = TOOL_ORDER } = {}) {
     const dir = path.join(root, "pkg");
@@ -119,11 +121,35 @@ rl.on("line", (l) => {
     }
   });
 
+  // D-R44-QWEN-WIN-1 (host audit qwen-3): Qwen spawns a hook through cmd.exe /d /s /c; a quoted node path reaches node with literal quotes.
+  test("[D-R44-QWEN-WIN-1] registry: qwen on Windows writes bare node, the doctor runs the absolute node; other hosts keep the absolute path", () => {
+    const reg = buildRegistry({ home: "/h", pkgDir: "/abs/pkg", env: {}, platform: "win32" });
+    const qwen = reg.find((r) => r.id === "qwen");
+    assert.equal(qwen.hookCommand[0], "node");
+    assert.equal(qwen.hookRunCommand[0], NODE);
+    assert.equal(hookCommandString(qwen).startsWith('node "'), true, hookCommandString(qwen));
+    assert.equal(reg.find((r) => r.id === "kiro").hookCommand[0], NODE);
+    const posix = buildRegistry({ home: "/h", pkgDir: "/abs/pkg", env: {}, platform: "linux" });
+    assert.equal(posix.find((r) => r.id === "qwen").hookCommand[0], NODE);
+  });
+
+  // D-STABLE-NODE-1 (host audit copilot-cli-3, vscode-3; #1183 stable-interpreter-path): a Homebrew node runs from
+  // <prefix>/Cellar/node/<version>/bin/node, a dir `brew upgrade node` removes. <prefix>/bin/node links to the same binary
+  // and survives the upgrade, so setup writes that one.
+  test("[D-STABLE-NODE-1] setup writes the stable Homebrew node link, not the versioned Cellar path", () => {
+    const cellar = "/opt/homebrew/Cellar/node/26.8.1/bin/node";
+    const same = { exists: (p) => p === "/opt/homebrew/bin/node", real: () => cellar };
+    assert.equal(stableNodePath(cellar, same), "/opt/homebrew/bin/node");
+    assert.equal(stableNodePath(cellar, { exists: () => false, real: () => cellar }), cellar); // no link: keep the real path
+    assert.equal(stableNodePath(cellar, { exists: () => true, real: (p) => p }), cellar); // link names another node: keep
+    assert.equal(stableNodePath("/usr/local/bin/node", same), "/usr/local/bin/node"); // not a Cellar path: unchanged
+  });
+
   test("registry: server and hook commands are absolute node + absolute file, never the bin name", () => {
     const reg = buildRegistry({ home: "/h", pkgDir: "/abs/pkg", env: {} });
     for (const r of reg.filter((x) => x.hookCommand)) {
       // D-C166-WIN-FIRE-2: codex on Windows writes bare node (0.166 runs hooks in PowerShell); the doctor runs hookRunCommand
-      const node = r.id === "codex" && process.platform === "win32" ? "node" : NODE;
+      const node = (r.id === "codex" || r.id === "qwen") && process.platform === "win32" ? "node" : NODE; // D-R44-QWEN-WIN-1
       assert.deepEqual(r.hookCommand, [node, path.join("/abs/pkg", "hook.mjs"), "--agent", r.id]);
       assert.equal(r.hookRunCommand[0], NODE);
     }
@@ -171,6 +197,20 @@ rl.on("line", (l) => {
     assert.equal(res.backupDir, path.join(s.home, ".context-mode", BACKUP_DIR, "r1"));
     assert.equal(readFileSync(path.join(res.backupDir, "files", "0"), "utf8").length > 0, true);
     assert.equal(existsSync(path.join(s.home, ".context-mode", LOCK_FILE)), false);
+  });
+
+  // #1318 (D-DATA-DIR-ENV-1): with CONTEXT_MODE_DATA_DIR set, setup keeps its backups and lock there, and --remove reads them back.
+  test("[#1318] setup and --remove use CONTEXT_MODE_DATA_DIR for backups and the lock; ~/.context-mode is not created", async (t) => {
+    const s = sandbox(t);
+    const data = path.join(s.root, "profile-work", "cm-data");
+    const env = { ...s.env, CONTEXT_MODE_DATA_DIR: data };
+    const codexToml = put(path.join(s.home, ".codex", "config.toml"), CODEX_V1);
+    const res = await runSetup({ home: s.home, pkgDir: s.pkgDir, env, agents: ["codex"], runId: "r1" });
+    assert.equal(res.exitCode, 0, JSON.stringify(res, null, 2));
+    assert.equal(res.backupDir, path.join(data, BACKUP_DIR, "r1"));
+    assert.equal(existsSync(path.join(s.home, ".context-mode")), false, "the default data dir is not created");
+    assert.equal(runRemove({ home: s.home, env }).exitCode, 0);
+    assert.equal(readFileSync(codexToml, "utf8"), CODEX_V1);
   });
 
   test("setup: second run changes nothing and makes no backup", async (t) => {
@@ -822,12 +862,64 @@ exit 0`;
 
     test(`[D-NI-EXT-DOCTOR-1] doctor: a disabled native ${bin} extension fails and names the enable command`, { skip: process.platform === "win32" && "fake agent binaries are sh scripts" }, async (t) => {
       const s = sandbox(t);
-      fakeBin(s.root, bin, EXT_FAKE(bin, "false", path.join(s.root, `${bin}.log`), stream));
+      fakeBin(s.root, bin, EXT_FAKE(bin, "false", path.join(s.root, `${bin}.log`), stream).split("Enabled (Workspace): true").join("Enabled (Workspace): false"));
       const doc = await runDoctor({ home: s.home, pkgDir: s.pkgDir, env: s.env, agents: [bin] });
       assert.equal(doc.agents[0].status, "FAIL", JSON.stringify(doc.agents[0], null, 2));
       assert.equal(doc.agents[0].reason, `context-mode is installed but disabled in ${bin}, run ${bin} extensions enable context-mode`);
     });
+
+    // D-R44-QWEN-SCOPE-1 (host audit qwen-2): `--scope project` lists "Enabled (User): false" and "Enabled (Workspace): true".
+    // The extension runs in this project: doctor says PASS and names no user-scope enable command.
+    test(`[D-R44-QWEN-SCOPE-1] doctor: a project-scope ${bin} extension (user off, workspace on) passes`, { skip: process.platform === "win32" && "fake agent binaries are sh scripts" }, async (t) => {
+      const s = sandbox(t);
+      fakeBin(s.root, bin, EXT_FAKE(bin, "false", path.join(s.root, `${bin}.log`), stream));
+      const doc = await runDoctor({ home: s.home, pkgDir: s.pkgDir, env: s.env, agents: [bin] });
+      assert.equal(doc.agents[0].status, "PASS", JSON.stringify(doc.agents[0], null, 2));
+    });
   }
+
+  // D-R44-ZCODE-NATIVE-1 (host audit zcode-1/2): `zcode plugins install` lists as JSON; setup writes nothing, doctor passes.
+  const ZC_LIST = (enabled, agent) => JSON.stringify([{ id: "context-mode@context-mode", enabled, hookDetails: [{ event: "PreToolUse", command: `node "\${CLAUDE_PLUGIN_ROOT}/hook.mjs" --agent ${agent}` }] }]);
+  const ZC_FAKE = (json, log) => `echo "$@" >> "${log}"\ncase "$1 $2" in\n  "plugins list") printf '%s' '${json}' ;;\nesac\nexit 0`;
+  test("[D-R44-ZCODE-NATIVE-1] doctor and setup: a native zcode plugin install passes and setup writes nothing", { skip: process.platform === "win32" && "fake agent binaries are sh scripts" }, async (t) => {
+    const s = sandbox(t);
+    const log = path.join(s.root, "zcode.log");
+    fakeBin(s.root, "zcode", ZC_FAKE(ZC_LIST(true, "zcode"), log));
+    const doc = await runDoctor({ home: s.home, pkgDir: s.pkgDir, env: s.env, agents: ["zcode"] });
+    assert.equal(doc.agents[0].status, "PASS", JSON.stringify(doc.agents[0], null, 2));
+    const names = doc.agents[0].checks.filter((c) => c.ok).map((c) => c.name);
+    for (const n of ["hook-registered", "hook-runs", "skills"]) assert.ok(names.includes(n), `${n}: ${JSON.stringify(doc.agents[0].checks)}`);
+    const res = await runSetup({ home: s.home, pkgDir: s.pkgDir, env: s.env, agents: ["zcode"], runId: "r" });
+    assert.equal(res.agents[0].status, "PASS", JSON.stringify(res.agents[0], null, 2));
+    assert.deepEqual(res.agents[0].changes, []);
+    assert.equal(existsSync(path.join(s.home, ".zcode")), false, "setup writes nothing under ~/.zcode (no second hook copy)");
+  });
+
+  test("[D-R44-ZCODE-NATIVE-1] doctor: a disabled zcode plugin fails with the enable command; a plugin with claude-code hooks fails with the update command", { skip: process.platform === "win32" && "fake agent binaries are sh scripts" }, async (t) => {
+    const s = sandbox(t);
+    const log = path.join(s.root, "zcode.log");
+    fakeBin(s.root, "zcode", ZC_FAKE(ZC_LIST(false, "zcode"), log));
+    let doc = await runDoctor({ home: s.home, pkgDir: s.pkgDir, env: s.env, agents: ["zcode"] });
+    assert.equal(doc.agents[0].status, "FAIL");
+    assert.equal(doc.agents[0].reason, "context-mode is installed but disabled in zcode, run zcode plugins enable context-mode@context-mode");
+    fakeBin(s.root, "zcode", ZC_FAKE(ZC_LIST(true, "claude-code"), log));
+    doc = await runDoctor({ home: s.home, pkgDir: s.pkgDir, env: s.env, agents: ["zcode"] });
+    assert.equal(doc.agents[0].status, "FAIL", JSON.stringify(doc.agents[0], null, 2));
+    assert.ok(doc.agents[0].reason.includes("zcode plugins update context-mode@context-mode"), doc.agents[0].reason);
+  });
+
+  // D-R44-OVERHEAD-WARN-1 (host audit zcode-3): a hook slower than the 15 ms budget is a warning, not a failed install.
+  test("[D-R44-OVERHEAD-WARN-1] doctor: hook overhead over the budget is a warning (ok stays true) and the agent still passes", async (t) => {
+    const s = sandbox(t);
+    const res = await runSetup({ home: s.home, pkgDir: s.pkgDir, env: s.env, agents: ["kiro"], runId: "r" });
+    assert.equal(res.agents[0].status, "PASS", JSON.stringify(res.agents[0], null, 2));
+    delete s.env.CM_HOOK_OVERHEAD_BUDGET_MS; // sandbox default is 60000 ms; unset means the real 15 ms budget
+    const doc = await runDoctor({ home: s.home, pkgDir: s.pkgDir, env: s.env, agents: ["kiro"] });
+    const hook = doc.agents[0].checks.find((c) => c.name === "hook");
+    assert.ok(hook, JSON.stringify(doc.agents[0]));
+    assert.equal(hook.ok, true, JSON.stringify(hook));
+    assert.equal(hook.warn === true, hook.overheadP95Ms > OVERHEAD_P95_MS, JSON.stringify(hook)); // over the 15 ms budget: warn, never ok:false
+  });
 
   // D-NI-QWEN-GATE-1: live (qwen 0.26.4, fake provider, e2e/live qwen-fire): with the extension linked and enabled, qwen still
   // ran no hook when settings.json had "disableAllHooks": true (user, project or system file) or when the extension was disabled

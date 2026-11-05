@@ -2,14 +2,15 @@
 // valid decision for its host, built from the tool-name table alone: no project, no store, no policy module.
 //   - own ctx_* tools and tools that cannot flood the context: allowed (ctx_doctor and the sandbox stay reachable);
 //   - shell, large Read, grep and fetch tools: denied with the usual redirect plus one line naming the error.
-// The error and its stack go to <DATA_ROOT>/hook-errors.log (append only, never cut), never only to stderr.
+// The error and its stack go to <data root>/hook-errors.log (append only, never cut), never only to stderr.
 // Imports: contracts and the adapter table only. Nothing here throws.
 const fs = process.getBuiltinModule("node:fs") as typeof import("node:fs");
 import { join, resolve } from "node:path";
 import type { AgentId } from "../contracts/agents.ts";
+import { dataRootOf } from "../project/config-dir.ts";
 import {
-  DATA_ROOT, HOOK_ERROR_LOG_FILE, HOOK_FAULT_ENV, HOOK_FAULT_STAGES, NODE_MIN, HOOK_FAIL_CWD_KEYS, HOOK_FAIL_EVENT_KEYS, HOOK_FAIL_INPUT_KEYS, HOOK_FAIL_LINE, HOOK_FAIL_PRE_EVENTS, HOOK_FAIL_REDIRECT,
-  HOOK_FAIL_TOOLS, HOOK_FAIL_TOOL_KEYS, HOOK_LOG_TAIL_BYTES, OUTPUT_CAP, OWN_TOOL_PREFIX, prefixToolNames, READ_PATH_KEYS,
+  DATA_DIR_ENV, HOOK_ERROR_LOG_FILE, HOOK_FAULT_ENV, HOOK_FAULT_STAGES, NODE_MIN, HOOK_FAIL_CWD_KEYS, HOOK_FAIL_EVENT_KEYS, HOOK_FAIL_INPUT_KEYS, HOOK_FAIL_LINE, HOOK_FAIL_PRE_EVENTS, HOOK_FAIL_REDIRECT,
+  HOOK_FAIL_TOOLS, HOOK_FAIL_TOOL_KEYS, HOOK_LOG_TAIL_BYTES, OUTPUT_CAP, OWN_TOOL_PREFIX, prefixToolNames, READ_PATH_KEYS, READ_PATH_LIST_KEY,
 } from "../contracts/constants.ts";
 import type { AdapterRow, HookOutput } from "../contracts/types.ts";
 import { getAdapter } from "../../adapters/table.ts";
@@ -42,10 +43,12 @@ function homeOf(env: NodeJS.ProcessEnv): string {
   return env.HOME ?? env.USERPROFILE ?? "";
 }
 
-/** <home>/<DATA_ROOT>/hook-errors.log, or "" when no home is known. */
+/** <data root>/hook-errors.log ($CONTEXT_MODE_DATA_DIR or <home>/.context-mode, #1318), or "" when neither is known. */
 export function hookLogPath(env: NodeJS.ProcessEnv): string {
+  const dir = env[DATA_DIR_ENV];
+  if (dir !== undefined && dir !== "") return join(dataRootOf(env, ""), HOOK_ERROR_LOG_FILE);
   const home = homeOf(env);
-  return home === "" ? "" : join(home, DATA_ROOT.slice(1), HOOK_ERROR_LOG_FILE);
+  return home === "" ? "" : join(dataRootOf(env, home), HOOK_ERROR_LOG_FILE);
 }
 
 /** A short, stable label: the CtxError code, else the error name. */
@@ -136,17 +139,20 @@ function isPreTool(row: AdapterRow, event: string): boolean {
   return HOOK_FAIL_PRE_EVENTS.includes(e) || (row.eventMap.PreToolUse ?? "").toLowerCase() === e;
 }
 
-/** True when the Read target is a whole file over the output cap. An unreadable, unnamed or ranged target is not denied. */
-function bigRead(input: Rec, cwd: string): boolean {
-  if ((input.offset ?? null) !== null || (input.limit ?? null) !== null) return false; // a ranged Read is never denied (same as decide)
-  const p = firstString(input, READ_PATH_KEYS);
-  if (p === "") return false;
+function bigFile(abs: string): boolean {
   try {
-    const st = fs.statSync(resolve(cwd, p));
+    const st = fs.statSync(abs);
     return st.isFile() && st.size > OUTPUT_CAP;
   } catch {
     return false;
   }
+}
+
+/** True when the Read target is a whole file over the output cap. An unreadable, unnamed or ranged target is not denied. */
+function bigRead(input: Rec, cwd: string): boolean {
+  if ((input.offset ?? null) !== null || (input.limit ?? null) !== null) return false; // a ranged Read is never denied (same as decide)
+  const many = Array.isArray(input[READ_PATH_LIST_KEY]) ? (input[READ_PATH_LIST_KEY] as unknown[]).filter((x): x is string => typeof x === "string") : [];
+  return [firstString(input, READ_PATH_KEYS), ...many].some((p) => p !== "" && bigFile(resolve(cwd, p)));
 }
 
 /**

@@ -14,8 +14,8 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, 
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { claudeDirOf, codexDirOf, copilotDirOf, kiroDirOf, opencodeDirOf } from "../core/project/config-dir.ts";
-import { AGENT_HOME_DIR, DB_FILE_NAME, OPENCODE_PLUGIN_PATH, PROJECTS_DIR_NAME, SERVER_KEY, TOOL_ORDER, UPGRADE_REPORT_ONLY_REASONS } from "../core/contracts/constants.ts";
+import { claudeDirOf, codexDirOf, copilotDirOf, dataRootOf, geminiDirOf, kiroDirOf, opencodeDirOf } from "../core/project/config-dir.ts";
+import { AGENT_HOME_DIR, DB_FILE_NAME, NATIVE_INSTALL, OPENCODE_PLUGIN_PATH, PROJECTS_DIR_NAME, SERVER_KEY, TOOL_ORDER, UPGRADE_REPORT_ONLY_REASONS } from "../core/contracts/constants.ts";
 import { CtxError } from "../core/contracts/errors.ts";
 import { ADAPTERS, getAdapter } from "../adapters/table.ts";
 import type { AgentId, HostConfigFormat, V1Finding } from "../core/contracts/types.ts";
@@ -23,7 +23,7 @@ import { detectV1 } from "../core/ops/detect-v1.ts";
 import { atomicWriteFile, renameWithRetry, unlinkWithRetry } from "../core/ops/atomic-file.ts";
 import { editHostConfigText, parseHostConfig } from "../core/ops/host-config.ts";
 import { hostLayout, hostText, withLayout } from "../core/ops/host-text.ts";
-import { AGENT_FLAG, BACKUP_DIR, COMMAND_SKILLS, HOOK_BUNDLE, LOCK_FILE, SKILL_FILE, STATE_DIR, assertWritable, buildRegistry, configEdits, hookCommandString, renderSkill } from "./registry.ts";
+import { AGENT_FLAG, BACKUP_DIR, COMMAND_SKILLS, HOOK_BUNDLE, LOCK_FILE, SKILL_FILE, assertWritable, buildRegistry, configEdits, hookCommandString, renderSkill } from "./registry.ts";
 import type { CheckRow, HookFile, HookInstall, NativePlugin, SetupContext } from "./registry.ts";
 import { pathEntries, spawnForm, spawnShim, whichBin, winCmdLine } from "./spawn-bin.ts";
 export { spawnForm, spawnShim, whichBin, winCmdLine };
@@ -568,8 +568,10 @@ function hookRound(row: CheckRow, env: SetupContext["env"]): Check {
   const bareP95Ms = Math.round(p95(bare));
   const overheadP95Ms = Math.max(0, wallP95Ms - bareP95Ms);
   const budget = overheadBudgetMs(env);
-  const ok = overheadP95Ms <= budget;
-  return { name: "hook", ok, overheadP95Ms, wallP95Ms, bareP95Ms, detail: ok ? undefined : `hook overhead p95 ${overheadP95Ms} ms > ${budget} ms` };
+  // D-R44-OVERHEAD-WARN-1 (host audit zcode-3): the 15 ms budget is a timing gate (e2e/checks/setup-hook-overhead.mjs). On the
+  // user's machine a slow disk or a busy CPU is no broken install, so setup and doctor report it as a warning and keep the install.
+  const over = overheadP95Ms > budget;
+  return { name: "hook", ok: true, ...(over ? { warn: true } : {}), overheadP95Ms, wallP95Ms, bareP95Ms, detail: over ? `hook overhead p95 ${overheadP95Ms} ms > ${budget} ms (slow host; not a failure)` : undefined };
 }
 
 /** D3 gate: best of HOOK_ROUNDS rounds; a hook that exits non-zero fails at once. */
@@ -579,7 +581,7 @@ function hookCheck(row: CheckRow, env: SetupContext["env"]): Check {
     const c = hookRound(row, env);
     if (c.overheadP95Ms === undefined) return c;
     if (!best || c.overheadP95Ms < (best.overheadP95Ms as number)) best = c;
-    if (c.ok) break;
+    if (!c.warn) break;
   }
   return best as Check;
 }
@@ -642,8 +644,8 @@ export function hookRunsCheck(row: CheckRow, env: SetupContext["env"]): Check {
 const SEEN_SQL = "SELECT 1 FROM events WHERE agent = ? LIMIT 1";
 export const NOT_SEEN_LINE = "not seen yet, run one tool call";
 /** ADR-0020 hook-seen: a journal row from this agent exists in any project db. None yet is a WARN, not a FAIL. */
-function hookSeenCheck(row: CheckRow, home: string): Check {
-  const base = path.join(home, STATE_DIR, PROJECTS_DIR_NAME);
+function hookSeenCheck(row: CheckRow, dataRoot: string): Check {
+  const base = path.join(dataRoot, PROJECTS_DIR_NAME);
   const dirs = existsSync(base) ? readdirSync(base) : [];
   let sqlite: typeof import("node:sqlite") | undefined;
   try { sqlite = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite"); } catch { sqlite = undefined; }
@@ -690,7 +692,7 @@ const EXT_ENABLED_WORKSPACE = "Enabled (Workspace):";
 const EXT_TRUE = "true";
 type NativeState = "enabled" | "disabled" | undefined;
 /** The extension list also shows the workspace scope: off there, gemini runs none of its hooks (D-NI-GEMINI-GATE-1). */
-interface NativeStatus { state: NativeState; workspaceOff: boolean }
+interface NativeStatus { state: NativeState; workspaceOff: boolean; hookGate?: string }
 
 /** codex plugin list: the table row that names the plugin, enabled when one of its words is "enabled". */
 function tableState(n: NativePlugin, text: string): NativeState {
@@ -706,15 +708,36 @@ function extensionState(n: NativePlugin, text: string): NativeStatus {
   let mine = false;
   let state: NativeState;
   let workspaceOff = false;
+  let workspaceOn = false;
   for (const raw of text.split("\n")) {
     const line = raw.trimEnd();
     if (line.length && !line.startsWith(" ")) { mine = line.split(" ")[1] === n.plugin; continue; }
     const t = line.trim();
     if (!mine) continue;
     if (t.startsWith(EXT_ENABLED_USER)) state = t.slice(EXT_ENABLED_USER.length).trim() === EXT_TRUE ? "enabled" : "disabled";
-    if (t.startsWith(EXT_ENABLED_WORKSPACE)) workspaceOff = t.slice(EXT_ENABLED_WORKSPACE.length).trim() !== EXT_TRUE;
+    if (t.startsWith(EXT_ENABLED_WORKSPACE)) { workspaceOff = t.slice(EXT_ENABLED_WORKSPACE.length).trim() !== EXT_TRUE; workspaceOn = !workspaceOff; }
   }
+  // D-R44-QWEN-SCOPE-1 (host audit qwen-2): `--scope project` leaves "Enabled (User): false" and "Enabled (Workspace): true";
+  // the extension runs in this project, so it is enabled here and the user-scope enable command is no fix.
+  if (state === "disabled" && workspaceOn) state = "enabled";
   return { state, workspaceOff };
+}
+
+/** zcode plugins list --json: an array of plugin objects. The row with our id gives enabled; hookDetails name the hook commands. */
+function jsonState(n: NativePlugin, text: string): NativeStatus {
+  const none: NativeStatus = { state: undefined, workspaceOff: false };
+  let doc: unknown;
+  try { doc = JSON.parse(text); } catch { return none; }
+  const mine = Array.isArray(doc) ? doc.find((p) => isObj(p) && p.id === n.plugin) : undefined;
+  if (!isObj(mine)) return none;
+  if (mine.enabled !== true) return { state: "disabled", workspaceOff: false };
+  // The agent flag of the plugin hooks: a plugin built before .zcode-plugin ran its hooks as --agent claude-code, and ZCode
+  // dropped their replies. The fix is the host's own update command.
+  const hooks = Array.isArray(mine.hookDetails) ? mine.hookDetails : [];
+  const own = `${AGENT_FLAG} ${n.bin}`;
+  const hookGate = hooks.some((h) => isObj(h) && typeof h.command === "string" && h.command.includes(own)) ? undefined
+    : `the installed ${n.plugin} runs no ${own} hook; run: ${n.bin} plugins update ${n.plugin}`;
+  return { state: "enabled", workspaceOff: false, hookGate };
 }
 
 /** The host's own install as its list command shows it (undefined: not listed in that form, setup owns the agent). */
@@ -725,6 +748,7 @@ function nativeState(row: CheckRow, env: SetupContext["env"]): NativeStatus {
   const r = runBin(n.bin, n.args, env);
   if (r.status !== 0) return none;
   // Gemini 0.65.0 writes the extension list to stderr (D-INST-2).
+  if (n.format === "json") return jsonState(n, `${r.stdout}`);
   return n.format === "extension" ? extensionState(n, `${r.stdout}${r.stderr}`) : { state: tableState(n, `${r.stdout}`), workspaceOff: false };
 }
 
@@ -746,7 +770,7 @@ function trimChars(w: string, chars: string): string {
  *  disabled extension is a FAIL that names the host's enable command: setup cannot link over it (D-NI-EXT-DOCTOR-1). */
 async function nativeResult(row: CheckRow, ctx: SetupContext, apply?: { run: Run; dryRun: boolean }): Promise<AgentResult | undefined> {
   const n = row.nativePlugin;
-  const { state, workspaceOff } = nativeState(row, ctx.env);
+  const { state, workspaceOff, hookGate } = nativeState(row, ctx.env);
   if (!n || state === undefined) return undefined;
   const bin = hostBin(n.bin, ctx.env).file;
   if (state === "disabled") {
@@ -769,6 +793,7 @@ async function nativeResult(row: CheckRow, ctx: SetupContext, apply?: { run: Run
   res.checks = await verifyRow(nativeRow(row, n), ctx);
   if (n.hookTrust) res.checks = withHookTrust(res.checks, hooks, !!apply?.dryRun);
   if (n.format === "extension") res.checks = withHookGate(res.checks, geminiGate(n, ctx, workspaceOff));
+  if (n.format === "json") res.checks = withHookGate(res.checks, hookGate);
   const bad = res.checks.filter((c) => !c.ok);
   if (bad.length) {
     res.status = "FAIL"; res.reason = bad.map((c) => `${c.name}: ${c.detail}`).join("; ");
@@ -880,7 +905,7 @@ async function verifyRow(row: CheckRow, ctx: SetupContext): Promise<Check[]> {
   const en = hookEnabledCheck(row, ls.status);
   if (en) checks.push(en);
   if (row.copilotSettings) checks.push(await copilotEnabledCheck(row, ctx));
-  checks.push(hookRunsCheck(row, env), hookSeenCheck(row, ctx.home), skillsCheck(row, ctx.pkgDir));
+  checks.push(hookRunsCheck(row, env), hookSeenCheck(row, dataRootOf(env, ctx.home)), skillsCheck(row, ctx.pkgDir));
   // D-NI-PI-GATE-1: a packages[] extensions filter keeps pi from loading the listed package's hooks.
   if (row.id === "pi") return withHookGate(checks, piSettingsGate(env, ctx.home, ctx.pkgDir, process.cwd()));
   // D-NI-VSCODE-GATE-1: chat.useHooks false, a hookFilesLocations that drops ~/.copilot/hooks, or a managed policy keeps VS Code from running the hook file.
@@ -949,6 +974,7 @@ function agentHomeDir(id: AgentId, ctx: SetupContext): string {
   if (id === "copilot-cli") return copilotDirOf(ctx.env, ctx.home); // D-WIN-COPILOT-HOME-1
   if (id === "kiro") return kiroDirOf(ctx.env, ctx.home); // D-WIN-KIRO-HOME-1
   if (id === "opencode") return opencodeDirOf(ctx.env, ctx.home); // D-WIN-OPENCODE-DIR-1
+  if (id === "gemini") return geminiDirOf(ctx.env, ctx.home); // D-R38-GEMINI-HOME-1
   return path.join(ctx.home, ...AGENT_HOME_DIR[id]);
 }
 
@@ -968,7 +994,7 @@ export async function runSetup(opts: SetupOptions): Promise<SetupResult> {
     if (!existsSync(path.join(ctx.pkgDir, f))) return { exitCode: 1, agents: [], error: `preflight: ${path.join(ctx.pkgDir, f)} is missing` };
   }
   const ids = opts.agents ?? detectAgents(reg, ctx);
-  const root = path.join(ctx.home, STATE_DIR);
+  const root = dataRootOf(ctx.env, ctx.home); // #1318 D-DATA-DIR-ENV-1
   if (!opts.dryRun) {
     const held = takeLock(root, runId);
     if (held) return { exitCode: 1, agents: [], error: held };
@@ -1018,7 +1044,7 @@ async function setupRow(row: CheckRow, ctx: SetupContext, run: Run, dryRun: bool
   } catch (e) { return { ...res, status: "FAIL", reason: (e as Error).message }; }
   // The config entry is current when the plan changes nothing in that file but codex trust entries.
   const configEdited = (file: string): boolean => plan.edits.some((e) => e.file === file && e.changes.some((c) => !isTrust(row, c)));
-  res.v1 = detectV1(row.id, ctx.home, { claudeDir: claudeDirOf(ctx.env, ctx.home), codexDir: codexDirOf(ctx.env, ctx.home), copilotDir: copilotDirOf(ctx.env, ctx.home), kiroDir: kiroDirOf(ctx.env, ctx.home), opencodeDir: opencodeDirOf(ctx.env, ctx.home) }).filter((f) => !(row.config && f.file === row.config.file && !configEdited(f.file)));
+  res.v1 = detectV1(row.id, ctx.home, { claudeDir: claudeDirOf(ctx.env, ctx.home), codexDir: codexDirOf(ctx.env, ctx.home), geminiDir: geminiDirOf(ctx.env, ctx.home), copilotDir: copilotDirOf(ctx.env, ctx.home), kiroDir: kiroDirOf(ctx.env, ctx.home), opencodeDir: opencodeDirOf(ctx.env, ctx.home) }).filter((f) => !(row.config && f.file === row.config.file && !configEdited(f.file)));
   res.changes = [...plan.edits.flatMap((e) => e.changes), ...[...plan.cli, ...plan.refresh].map((args) => ({ command: [row.cli!.bin, ...args] }))];
   if (dryRun) return res;
   try {
@@ -1063,7 +1089,7 @@ export async function runDoctor(opts: SetupOptions): Promise<SetupResult> {
     if (!existsSync(path.join(ctx.pkgDir, f))) return { exitCode: 1, agents: [], error: `preflight: ${path.join(ctx.pkgDir, f)} is missing` };
   }
   const ids = opts.agents ?? detectAgents(reg, ctx);
-  const run = new Run(path.join(ctx.home, STATE_DIR), "doctor"); // dry run: never records or writes
+  const run = new Run(dataRootOf(ctx.env, ctx.home), "doctor"); // dry run: never records or writes
   const agents: AgentResult[] = [];
   for (const id of ids) {
     const row = reg.find((r) => r.id === id);
@@ -1093,7 +1119,11 @@ function notSetUpReason(row: CheckRow, res: AgentResult, env: SetupContext["env"
   const h = row.hookInstall;
   const missing = row.id === "opencode" && h.kind === "plugin-list" && res.changes.some((c) => c.path === h.key[0]);
   const oc2 = missing && hostBin("opencode", env).file !== undefined && opencodeMajor("opencode", env) >= 2;
-  return oc2 ? `${NOT_SET_UP_REASON}, or run: opencode plugin add context-mode` : NOT_SET_UP_REASON;
+  if (oc2) return `${NOT_SET_UP_REASON}, or run: opencode plugin add context-mode`;
+  // D-R44-GEMINI-NATIVE-CMD-1 (host audit gemini-1): gemini is on PATH and lists no context-mode extension, so the fix
+  // line names the host's own install command too.
+  if (row.id === "gemini" && hostBin("gemini", env).file !== undefined) return `${NOT_SET_UP_REASON}, or run: ${NATIVE_INSTALL.gemini[0]}`;
+  return NOT_SET_UP_REASON;
 }
 
 /** D-HF-OPENCODE-GATE-1: a plugin list that loads twice or names a missing file of ours is a hook-registered FAIL with its own fix line. */
@@ -1120,7 +1150,7 @@ function isTrust(row: CheckRow, c: Change): boolean {
 /** setup --remove: undo every recorded run, newest first, so each touched file gets its pre-setup bytes back. */
 export function runRemove(opts: { home: string; env?: SetupContext["env"] }): { exitCode: number; restored: number; error?: string } {
   const env = opts.env ?? process.env;
-  const root = path.join(opts.home, STATE_DIR);
+  const root = dataRootOf(env, opts.home); // #1318 D-DATA-DIR-ENV-1
   const base = path.join(root, BACKUP_DIR);
   if (!existsSync(base)) return { exitCode: 0, restored: 0 };
   const held = takeLock(root, "remove");

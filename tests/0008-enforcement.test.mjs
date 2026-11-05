@@ -500,6 +500,22 @@ describe("ADR-0008 shell unwrap", { concurrency: CONC }, () => {
 });
 
 describe("ADR-0008 read-deny hook text", { concurrency: CONC }, () => {
+  // D-R44-OC-READ-1 (#1310, host audit opencode-5): OpenCode's own `read` tool (filePath, or the 2.x filePaths list) gets the Read size guard.
+  test("[D-R44-OC-READ-1] opencode read: a large whole file is denied, a ranged read passes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cm-ocread-"));
+    try {
+      const big = join(dir, "big.log");
+      writeFileSync(big, "x".repeat(OUTPUT_CAP + 1000));
+      const row = getAdapter("opencode");
+      const ev = (input) => ({ ...row.decode({ type: "execute.before", sessionID: "s", tool: "read", args: input, directory: dir }) });
+      assert.equal(decide(ev({ filePath: big }), row, null).kind, "deny");
+      assert.equal(decide(ev({ filePaths: [big] }), row, null).kind, "deny");
+      assert.equal(decide(ev({ filePath: big, offset: 1, limit: 10 }), row, null).kind, "allow");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // D-DU-DENY-1: the Read deny is one line built from the src/prompt/hooks/read-deny.md template:
   // the exact ctx_execute call for this file, no prose from the tool descriptions. Golden text + byte cap.
 
@@ -822,6 +838,58 @@ describe("ADR-0008 decide rule table and golden rows", () => {
     // E1: newline/CR does not bypass a rule
     assert.equal(bash("ls\nrm -rf /tmp/x", CC, ["Bash(rm -rf:*)"]).kind, "deny");
     assert.equal(bash("ls\rrm -rf /tmp/x", CC, ["Bash(rm -rf:*)"]).kind, "deny");
+  });
+
+  test("D-DENY-SHELL-LANG-1: a ctx_execute language that runs as a shell gets the Bash rules", () => {
+    const rules = ["Bash(rm -rf:*)"];
+    for (const language of ["shell", "bash", "sh", "zsh", "dash", "ksh", "fish", "/bin/bash", "BASH", "bash.exe"]) {
+      assert.deepEqual(decide(ev("ctx_execute", { language, code: "rm -rf ./dummy" }), CC, rules), { kind: "deny", reason: USER_DENY_REASON_PREFIX + "Bash(rm -rf:*)" }, language);
+    }
+    for (const language of ["python", "javascript", "typescript", "powershell", "bashful"]) {
+      assert.equal(decide(ev("ctx_execute", { language, code: "rm -rf ./dummy" }), CC, rules).kind, "allow", language);
+    }
+  });
+
+  test("D-DENY-SEGMENTS-1: ctx_execute shell code and ctx_batch commands are checked per segment, like Bash", () => {
+    const rules = ["Bash(rm -rf:*)"];
+    const want = { kind: "deny", reason: USER_DENY_REASON_PREFIX + "Bash(rm -rf:*)" };
+    for (const code of ["true; rm -rf /tmp/d", "cd d && rm -rf x", 'sh -c "rm -rf x"', "sudo rm -rf x", "echo $(rm -rf x)", "ls\nrm -rf x", 'ls; rm -rf / "x']) {
+      assert.equal(bash(code, CC, rules).kind, "deny", code);
+      assert.deepEqual(decide(ev("ctx_execute", { language: "shell", code }), CC, rules), want, code);
+      assert.deepEqual(decide(ev("ctx_batch", { commands: ["ls", code] }), CC, rules), want, code);
+    }
+    assert.equal(decide(ev("ctx_batch", { commands: ["ls -la", "echo rm -rf x"] }), CC, rules).kind, "allow");
+    assert.equal(decide(ev("ctx_execute", { language: "shell", code: "git status && ls" }), CC, rules).kind, "allow");
+  });
+
+  test("D-DENY-LINEAR-1: a long ctx_batch command is scanned in linear time and a later denied command is still denied", () => {
+    const rules = ["Bash(rm:*)", "Bash(curl:*)", "Bash(wget:*)", "Bash(sudo:*)", "Bash(git push:*)"];
+    const pad = "echo" + " a".repeat(64 * 1024);
+    const t = performance.now();
+    const d = decide(ev("ctx_batch", { commands: [pad, "rm -rf dummy"] }), CC, rules);
+    const ms = performance.now() - t;
+    assert.deepEqual(d, { kind: "deny", reason: USER_DENY_REASON_PREFIX + "Bash(rm:*)" });
+    assert.ok(ms < 2000, `deny check took ${Math.round(ms)} ms on 128K chars`);
+    // many segments must not overflow the stack (a throw would fall back to allow for ctx_* tools)
+    const many = "a;".repeat(200 * 1000) + "rm x";
+    assert.equal(decide(ev("ctx_execute", { language: "shell", code: many }), CC, rules).kind, "deny");
+  });
+
+  test("D-DENY-LINEAR-1: the linear matcher keeps the prefix-rule and glob results", () => {
+    const m = (text, rule) => matchesAnyDenyPattern(text, [rule]) !== null;
+    assert.ok(m("rm", "Bash(rm:*)"));
+    assert.ok(m("rm -rf x", "Bash(rm:*)"));
+    assert.ok(!m("rmdir x", "Bash(rm:*)"));
+    assert.ok(m("git push origin main", "Bash(git push:*)"));
+    assert.ok(!m("git pushx", "Bash(git push:*)"));
+    assert.ok(m("npm run build", "Bash(npm run *)"));
+    assert.ok(!m("npm test", "Bash(npm run *)"));
+    assert.ok(m("rm -rf /", "Bash(rm -rf /)"));
+    assert.ok(!m("rm -rf /x", "Bash(rm -rf /)"));
+    assert.ok(m("ab x", "Bash(a?:*)"));
+    assert.ok(!m("a x", "Bash(a?:*)"));
+    assert.ok(m("foo bar baz qux", "Bash(*bar*:*)"));
+    assert.ok(m("x\ty", "Bash(x:*)"));
   });
 
   test("E2: unreadable policy fails closed only with the env flag", () => {
@@ -1325,7 +1393,6 @@ describe("ADR-0008 privacy: network call sites in src (D-PRIVACY-NET-1)", { conc
     "src/cli/commands.ts": ['spawnSync("gh"', "spawnSync(npm"], // gh issue create after a keypress (debug report); npm i -g in `context-mode upgrade`
     "src/core/contracts/constants.ts": ["fetch(", "GIT_LS_REMOTE", "GIT_CLONE_ARGS"], // the constants themselves (FETCH_CALL is a deny pattern)
     "src/core/ops/doctor-env.ts": ["fetch(", "GIT_LS_REMOTE"], // doctor D1: GET registry.npmjs.org/-/package/context-mode/dist-tags; after an npm failure, git ls-remote --tags --refs <release repo> v* (D-DOCTOR-D1-TAGS-1)
-    "src/core/ops/release-fetch.ts": ["GIT_CLONE_ARGS"], // ctx_upgrade: git clone --depth 1 of the release branch
     "src/core/sandbox/fetch.ts": ["node:http", "node:net", "node:tls", "node:dns"], // ctx_index / ctx_fetch of a URL the agent asks for
   };
   const codeLines = (text) => text.split("\n").filter((l) => {
@@ -1359,7 +1426,7 @@ describe("ADR-0008 privacy: network call sites in src (D-PRIVACY-NET-1)", { conc
 
   test("README names the zero telemetry line and each allowed call site", () => {
     const readme = readFileSync(join(ROOT, "README.md"), "utf8");
-    for (const need of ["Zero telemetry", "src/core/sandbox/fetch.ts", "git ls-remote", "git clone", "gh issue create", "npm i -g context-mode", "D-PRIVACY-NET-1"]) {
+    for (const need of ["Zero telemetry", "src/core/sandbox/fetch.ts", "git ls-remote", "gh issue create", "npm i -g context-mode", "D-PRIVACY-NET-1"]) {
       assert.ok(readme.includes(need), `README lacks ${need}`);
     }
   });
