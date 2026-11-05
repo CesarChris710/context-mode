@@ -18,6 +18,7 @@ import * as kiro from "../src/adapters/kiro.ts";
 import * as zcode from "../src/adapters/zcode.ts";
 import * as pi from "../src/adapters/pi.ts";
 import * as opencode from "../src/adapters/opencode.ts";
+import * as antigravity from "../src/adapters/antigravity.ts";
 import { CLIENT_NAME_TO_PLATFORM } from "../src/core/contracts/client-map.ts";
 import { spawnSync } from "node:child_process";
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
@@ -54,6 +55,7 @@ describe("ADR-0020 adapters", () => {
       zcode: ["hooks+mcp", "spawn-cwd", "mcp__context-mode__", "sessionstart", "none", 5000, "deny-reason"],
       pi: ["in-process", "pi:ctx.cwd", "", "pi-flag", "none", 0, "deny-reason"],
       opencode: ["in-process", "spawn-cwd", "", "opencode-cache", "none", 0, "deny-reason"],
+      "antigravity-cli": ["hooks+mcp", "spawn-cwd", "mcp_context-mode_", "none", "none", 5000, "deny-reason"],
     };
 
     const CLAUDE_NATIVE = { shell: ["Bash"], read: ["Read"], grep: ["Grep"], webfetch: ["WebFetch"], edit: ["Write", "Edit", "NotebookEdit"] };
@@ -70,6 +72,7 @@ describe("ADR-0020 adapters", () => {
       zcode: CLAUDE_NATIVE,
       pi: { shell: ["bash", "powershell"], read: ["read"] }, // D-HA-PI-NAMES-1, D-R38-PI-PWSH-1
       opencode: { shell: ["bash"] }, // D-HF-OPENCODE-SHELL-1
+      "antigravity-cli": { shell: ["run_command"], read: ["read_file"], grep: ["grep_search"], webfetch: ["web_fetch"] },
     };
 
     const CLAUDE_EVENTS = { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PreToolUse: "PreToolUse", PostToolUse: "PostToolUse" };
@@ -86,9 +89,10 @@ describe("ADR-0020 adapters", () => {
       pi: { SessionStart: "session_start", UserPromptSubmit: "input", PreToolUse: "tool_call", PostToolUse: "tool_result" },
       // Usage: OpenCode step-finish cost row (DEVIATIONS D-M5-arch-2).
       opencode: { SessionStart: "context", UserPromptSubmit: "prompt", PreToolUse: "execute.before", PostToolUse: "execute.after", PreCompact: "compaction", Usage: "step-finish" },
+      "antigravity-cli": { SessionStart: "SessionStart", UserPromptSubmit: "PreInvocation", PreToolUse: "PreToolUse", PostToolUse: "PostToolUse" },
     };
 
-    const MODULES = { "claude-code": claudeCode, codex, gemini, qwen, "copilot-cli": copilotCli, vscode, kiro, zcode, pi, opencode };
+    const MODULES = { "claude-code": claudeCode, codex, gemini, qwen, "copilot-cli": copilotCli, vscode, kiro, zcode, pi, opencode, "antigravity-cli": antigravity };
 
     test("ADAPTERS has one row per AgentId, in AGENT_IDS order (impl/10 §1.2, §1.3)", () => {
       assert.deepEqual(ADAPTERS.map((r) => r.id), [...AGENT_IDS]);
@@ -139,6 +143,7 @@ describe("ADR-0020 adapters", () => {
         vscode: { hook_event_name: "PreToolUse", session_id: "s", cwd: "/p", tool_name: "runInTerminal", tool_input: { command: "ls" } },
         kiro: { hook_event_name: "PreToolUse", session_id: "s", cwd: "/p", tool_name: "execute_bash", tool_input: { command: "ls" } },
         zcode: { hook_event_name: "PreToolUse", session_id: "s", cwd: "/p", tool_name: "Bash", tool_input: { command: "ls" } },
+        "antigravity-cli": { hookEventName: "PreToolUse", conversationId: "s", workspacePaths: ["/p"], toolCall: { name: "run_command", args: { CommandLine: "ls" } } },
       };
       for (const [id, raw] of Object.entries(payloads)) {
         const r = getAdapter(id);
@@ -233,6 +238,7 @@ describe("ADR-0020 adapters", () => {
       zcode: { kind: "home-file", path: ".zcode/cli/config.json" },
       pi: { kind: "in-process", path: "pi/index.js" },
       opencode: { kind: "in-process", path: "opencode/plugin.js" },
+      "antigravity-cli": { kind: "home-file", path: ".gemini/config/hooks.json" },
     };
     const SKILL_CHANNEL = {
       "claude-code": { kind: "package", path: "skills" }, // D-R33-CC-SKILLS-1: shared with gemini and qwen
@@ -245,6 +251,7 @@ describe("ADR-0020 adapters", () => {
       zcode: { kind: "home-dir", path: ".zcode/skills" },
       pi: { kind: "package", path: "pi/skills" },
       opencode: { kind: "home-dir", path: ".config/opencode/skills" },
+      "antigravity-cli": { kind: "home-dir", path: ".gemini/config/skills" },
     };
 
     test("every row has a hookChannel and a skillChannel with a non-empty path (ADR-0020, no exception rows)", () => {
@@ -265,6 +272,13 @@ describe("ADR-0020 adapters", () => {
 
     test("MCP clientInfo.name opencode maps to adapter opencode (#1276)", () => {
       assert.equal(CLIENT_NAME_TO_PLATFORM["opencode"], "opencode");
+    });
+
+    test("MCP clientInfo.name antigravity maps to antigravity-cli", () => {
+      assert.equal(CLIENT_NAME_TO_PLATFORM["antigravity"], "antigravity-cli");
+      assert.equal(CLIENT_NAME_TO_PLATFORM["antigravity-cli"], "antigravity-cli");
+      assert.equal(CLIENT_NAME_TO_PLATFORM["antigravity-client"], "antigravity-cli");
+      assert.equal(CLIENT_NAME_TO_PLATFORM["agy"], "antigravity-cli");
     });
   });
 
@@ -302,6 +316,7 @@ describe("ADR-0020 adapters", () => {
         zcode: ["hooks+mcp", "spawn-cwd", "mcp__context-mode__", "sessionstart", "none", "deny-reason"],
         pi: ["in-process", "pi:ctx.cwd", "", "pi-flag", "none", "deny-reason"],
         opencode: ["in-process", "spawn-cwd", "", "opencode-cache", "none", "deny-reason"],
+        "antigravity-cli": ["hooks+mcp", "spawn-cwd", "mcp_context-mode_", "none", "none", "deny-reason"],
       };
       for (const r of ADAPTERS) {
         assert.deepEqual(
@@ -1878,6 +1893,154 @@ describe("ADR-0020 adapters", () => {
 
     test("encode replace is a no-op on ZCode (no replace field documented)", () => {
       assert.deepEqual(encode({ ...pre, event: "PostToolUse" }, { kind: "replace", output: "x" }), { stdout: "", exitCode: 0 });
+    });
+  });
+
+  describe("ADR-0020 antigravity adapter", () => {
+    const { decode: agyDecode, encode: agyEncode, TOOL_NAME_PREFIX: AGY_PREFIX } = antigravity;
+
+    test("own prefix is mcp_context-mode_", () => {
+      assert.equal(AGY_PREFIX, "mcp_context-mode_");
+    });
+
+    test("decode SessionStart: reads conversationId and workspacePaths", () => {
+      const ev = agyDecode({
+        hookEventName: "SessionStart",
+        conversationId: "conv-123",
+        workspacePaths: ["/workspace/proj"],
+      });
+      assert.equal(ev.event, "SessionStart");
+      assert.equal(ev.agent, "antigravity-cli");
+      assert.equal(ev.sessionId, "conv-123");
+      assert.equal(ev.cwd, "/workspace/proj");
+      assert.equal(ev.source, "startup");
+    });
+
+    test("decode PreInvocation: reads lastUserInput as prompt", () => {
+      const ev = agyDecode({
+        hookEventName: "PreInvocation",
+        conversationId: "conv-123",
+        workspacePaths: ["/workspace/proj"],
+        lastUserInput: "write unit tests",
+      });
+      assert.equal(ev.event, "UserPromptSubmit");
+      assert.equal(ev.prompt, "write unit tests");
+    });
+
+    test("decode PreToolUse native tools to canonical names and normalized inputs", () => {
+      const bash = agyDecode({
+        hookEventName: "PreToolUse",
+        conversationId: "c-1",
+        workspacePaths: ["/w"],
+        toolCall: { name: "run_command", args: { CommandLine: "npm test" } },
+      });
+      assert.equal(bash.event, "PreToolUse");
+      assert.equal(bash.tool?.canonicalName, "Bash");
+      assert.equal(bash.tool?.input.command, "npm test");
+
+      const read = agyDecode({
+        hookEventName: "PreToolUse",
+        conversationId: "c-1",
+        workspacePaths: ["/w"],
+        toolCall: { name: "read_file", args: { AbsolutePath: "/src/index.ts", startLine: 1, endLine: 10 } },
+      });
+      assert.equal(read.tool?.canonicalName, "Read");
+      assert.equal(read.tool?.input.file_path, "/src/index.ts");
+      assert.equal(read.tool?.input.offset, 1);
+      assert.equal(read.tool?.input.limit, 10);
+
+      const grep = agyDecode({
+        hookEventName: "PreToolUse",
+        conversationId: "c-1",
+        workspacePaths: ["/w"],
+        toolCall: { name: "grep_search", args: { Pattern: "test", Path: "/src" } },
+      });
+      assert.equal(grep.tool?.canonicalName, "Grep");
+      assert.equal(grep.tool?.input.pattern, "test");
+      assert.equal(grep.tool?.input.path, "/src");
+
+      const fetch = agyDecode({
+        hookEventName: "PreToolUse",
+        conversationId: "c-1",
+        workspacePaths: ["/w"],
+        toolCall: { name: "web_fetch", args: { URL: "https://example.com" } },
+      });
+      assert.equal(fetch.tool?.canonicalName, "WebFetch");
+      assert.equal(fetch.tool?.input.url, "https://example.com");
+    });
+
+    test("decode strips own prefix and handles other MCP servers", () => {
+      const own = agyDecode({
+        hookEventName: "PreToolUse",
+        conversationId: "c-1",
+        workspacePaths: ["/w"],
+        toolCall: { name: "mcp_context-mode_ctx_execute", args: {} },
+      });
+      assert.equal(own.tool?.canonicalName, "ctx_execute");
+
+      const other = agyDecode({
+        hookEventName: "PreToolUse",
+        conversationId: "c-1",
+        workspacePaths: ["/w"],
+        toolCall: { name: "run_query", args: {} },
+        mcpContext: { serverName: "database", toolName: "query" },
+      });
+      assert.equal(other.tool?.canonicalName, "mcp:database:query");
+    });
+
+    test("decode PostToolUse: reads error and tool output", () => {
+      const err = agyDecode({
+        hookEventName: "PostToolUse",
+        conversationId: "c-1",
+        workspacePaths: ["/w"],
+        toolCall: { name: "run_command", args: { CommandLine: "bad" } },
+        error: "command not found",
+      });
+      assert.equal(err.event, "PostToolUse");
+      assert.equal(err.result?.isError, true);
+      assert.equal(err.result?.text, "command not found");
+
+      const ok = agyDecode({
+        hookEventName: "PostToolUse",
+        conversationId: "c-1",
+        workspacePaths: ["/w"],
+        toolCall: { name: "run_command", args: { CommandLine: "ls" } },
+        toolResponse: "file1\nfile2",
+      });
+      assert.equal(ok.result?.isError, false);
+      assert.equal(ok.result?.text, "file1\nfile2");
+    });
+
+    test("encode allow: empty stdout on PreToolUse, empty JSON object on PostToolUse", () => {
+      const pre = { event: "PreToolUse", agent: "antigravity-cli", sessionId: "s", cwd: "/w" };
+      assert.deepEqual(agyEncode(pre, { kind: "allow" }), { stdout: "", exitCode: 0 });
+
+      const post = { event: "PostToolUse", agent: "antigravity-cli", sessionId: "s", cwd: "/w" };
+      assert.deepEqual(agyEncode(post, { kind: "allow" }), { stdout: "{}", exitCode: 0 });
+    });
+
+    test("encode deny: decision deny with reason and optional overwrite", () => {
+      const pre = { event: "PreToolUse", agent: "antigravity-cli", sessionId: "s", cwd: "/w" };
+      const denied = agyEncode(pre, { kind: "deny", reason: "Tool blocked" });
+      assert.equal(denied.exitCode, 0);
+      assert.deepEqual(JSON.parse(denied.stdout), { decision: "deny", reason: "Tool blocked" });
+
+      const rewritten = agyEncode(pre, { kind: "deny", reason: "Rewrite to ctx_execute", rewritten: "node run.mjs" });
+      assert.equal(rewritten.exitCode, 0);
+      const res = JSON.parse(rewritten.stdout);
+      assert.equal(res.decision, "deny");
+      assert.equal(res.reason, "node run.mjs\nRewrite to ctx_execute");
+      assert.deepEqual(res.overwrite, { CommandLine: "node run.mjs", command: "node run.mjs" });
+    });
+
+    test("encode hint: injectSteps for SessionStart / UserPromptSubmit, empty JSON on PostToolUse", () => {
+      const ss = { event: "SessionStart", agent: "antigravity-cli", sessionId: "s", cwd: "/w" };
+      const hint = agyEncode(ss, { kind: "hint", text: "Welcome hint", onceKey: "k" });
+      assert.equal(hint.exitCode, 0);
+      assert.deepEqual(JSON.parse(hint.stdout), { injectSteps: [{ ephemeralMessage: "Welcome hint" }] });
+
+      const post = { event: "PostToolUse", agent: "antigravity-cli", sessionId: "s", cwd: "/w" };
+      assert.deepEqual(agyEncode(post, { kind: "hint", text: "ignored", onceKey: "k" }), { stdout: "{}", exitCode: 0 });
     });
   });
 });

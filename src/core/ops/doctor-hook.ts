@@ -82,6 +82,7 @@ function loadFixture(bundleDir: string, agent: AgentId): FixtureEntry | { cause:
 // D-D5-ALL-AGENTS-1: the payload key that carries the project dir. OpenCode's plugin sends `directory` (adapters/opencode.ts decode).
 const CWD_KEY: Readonly<Record<AgentId, string>> = {
   "claude-code": "cwd", codex: "cwd", gemini: "cwd", qwen: "cwd", "copilot-cli": "cwd", vscode: "cwd", kiro: "cwd", zcode: "cwd", pi: "cwd", opencode: "directory",
+  "antigravity-cli": "cwd",
 };
 
 /** The fixture payload with the agent's cwd key set to the project worktree: a recorded /tmp/project is no repository and would log a hook error each run. */
@@ -92,10 +93,11 @@ export function payloadFor(agent: AgentId, payload: unknown, worktree: string | 
 // D-D5-ALL-AGENTS-1: the answer shape of each adapter's encode. "claude": hookSpecificOutput.hookEventName is the event
 // (encodeClaudeShape). "gemini": {decision, reason} or {hookSpecificOutput}. "copilot": a flat object (permissionDecision,
 // additionalContext, modifiedResult). "text": plain stdout, exit 2 on deny (kiro, pi, opencode).
-type Shape = "claude" | "gemini" | "copilot" | "text";
+type Shape = "claude" | "gemini" | "copilot" | "text" | "antigravity";
 const SHAPE: Readonly<Record<AgentId, Shape>> = {
   "claude-code": "claude", codex: "claude", qwen: "claude", vscode: "claude", zcode: "claude",
   gemini: "gemini", "copilot-cli": "copilot", kiro: "text", pi: "text", opencode: "text",
+  "antigravity-cli": "antigravity",
 };
 const COPILOT_KEYS = ["permissionDecision", "additionalContext", "modifiedResult"];
 
@@ -115,6 +117,7 @@ function isNativeShape(agent: AgentId, stdout: string, exitCode: number | null, 
   switch (SHAPE[agent]) {
     case "claude": return isObject(out.hookSpecificOutput) && out.hookSpecificOutput.hookEventName === event;
     case "gemini": return typeof out.decision === "string" || isObject(out.hookSpecificOutput);
+    case "antigravity": return typeof out.decision === "string" || Object.keys(out).length === 0 || Array.isArray(out.injectSteps);
     default: return COPILOT_KEYS.some((k) => Object.hasOwn(out, k));
   }
 }

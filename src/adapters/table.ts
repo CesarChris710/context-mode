@@ -14,6 +14,7 @@ import * as kiro from "./kiro.ts";
 import * as zcode from "./zcode.ts";
 import * as pi from "./pi.ts";
 import * as opencode from "./opencode.ts";
+import * as antigravity from "./antigravity.ts";
 
 const CLAUDE_EVENTS = { SessionStart: "SessionStart", UserPromptSubmit: "UserPromptSubmit", PreToolUse: "PreToolUse", PostToolUse: "PostToolUse" };
 const CLAUDE_TOOLS = { shell: ["Bash"], read: ["Read"], grep: ["Grep"], webfetch: ["WebFetch"], edit: ["Write", "Edit", "NotebookEdit"] };
@@ -111,6 +112,26 @@ export const ADAPTERS: readonly AdapterRow[] = Object.freeze([
     compactDelivery: "opencode-cache", compactSummary: "none", hookTimeoutMs: IN_PROCESS_TIMEOUT_MS, denyChannel: "deny-reason",
     hookChannel: { kind: "in-process", path: "opencode/plugin.js" }, skillChannel: { kind: "home-dir", path: ".config/opencode/skills" }, // ADR-0020
     decode: opencode.decode, encode: opencode.encode, toCanonicalTool: opencode.toCanonicalTool,
+  },
+  {
+    id: "antigravity-cli", installMode: "hooks+mcp", projectSource: "spawn-cwd", toolNamePrefix: antigravity.TOOL_NAME_PREFIX,
+    nativeTools: {
+      shell: [...antigravity.SHELL_TOOL_NAMES],
+      read: [...antigravity.READ_TOOL_NAMES],
+      grep: [...antigravity.GREP_TOOL_NAMES],
+      webfetch: [...antigravity.WEBFETCH_TOOL_NAMES],
+    },
+    execReadOnlyHint: false,
+    eventMap: {
+      SessionStart: "SessionStart",
+      UserPromptSubmit: "PreInvocation",
+      PreToolUse: "PreToolUse",
+      PostToolUse: "PostToolUse",
+    },
+    compactDelivery: "none", compactSummary: "none", hookTimeoutMs: HOOK_TIMEOUT_MS, denyChannel: "deny-reason",
+    hookChannel: { kind: "home-file", path: ".gemini/config/hooks.json" },
+    skillChannel: { kind: "home-dir", path: ".gemini/config/skills" },
+    decode: antigravity.decode, encode: antigravity.encode,
   },
 ] satisfies Row[]);
 

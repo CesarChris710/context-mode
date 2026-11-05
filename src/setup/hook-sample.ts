@@ -54,6 +54,16 @@ export function hookSample(id: AgentId, cwd: string, text: string): HookSample {
       return { effect, payload: { type: event, sessionId: SAMPLE_SESSION, cwd, toolName: tool, input: command, content: text, isError: false } };
     case "opencode":
       return { effect, payload: { type: event, sessionID: SAMPLE_SESSION, directory: cwd, tool, args: command } };
+    case "antigravity-cli":
+      return {
+        effect,
+        payload: {
+          hookEventName: event,
+          conversationId: SAMPLE_SESSION,
+          workspacePaths: [cwd],
+          toolCall: { name: tool, args: { CommandLine: SAMPLE_COMMAND } },
+        },
+      };
     case "codex":
     case "qwen":
     case "vscode":

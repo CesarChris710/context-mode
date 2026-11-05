@@ -82,12 +82,14 @@ export function parseFlags(cmd: Command, argv: readonly string[]): Flags {
         if (!TAG_RE.test(value!)) throw new UsageError(`--tag "${value}" is not an npm dist-tag or version.`);
         f.tag = value!;
         break;
-      case "--print":
-        if (!(AGENT_IDS as readonly string[]).includes(value!)) throw new UsageError(`unknown agent "${value}".${suggest(value!, AGENT_IDS)} Run context-mode setup --list.`);
-        f.print = value as AgentId;
+      case "--print": {
+        const norm = (value === "agy" || value === "antigravity") ? "antigravity-cli" : value!;
+        if (!(AGENT_IDS as readonly string[]).includes(norm)) throw new UsageError(`unknown agent "${value}".${suggest(value!, AGENT_IDS)} Run context-mode setup --list.`);
+        f.print = norm as AgentId;
         break;
+      }
       case "--agents": {
-        const ids = value!.split(",").map((s) => s.trim()).filter(Boolean);
+        const ids = value!.split(",").map((s) => s.trim()).filter(Boolean).map((s) => (s === "agy" || s === "antigravity" ? "antigravity-cli" : s));
         for (const id of ids) {
           if (!(AGENT_IDS as readonly string[]).includes(id)) throw new UsageError(`unknown agent "${id}".${suggest(id, AGENT_IDS)} Run context-mode setup --list.`);
         }

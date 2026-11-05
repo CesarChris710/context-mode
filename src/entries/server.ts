@@ -33,7 +33,8 @@ function resolveAgent(argv: readonly string[], env: NodeJS.ProcessEnv): AgentId 
   let afterFlag = false;
   for (const arg of argv) {
     if (afterFlag) {
-      const known = AGENT_IDS.find((a) => a === arg);
+      const normalized = (arg === "antigravity" || arg === "agy") ? "antigravity-cli" : arg;
+      const known = AGENT_IDS.find((a) => a === normalized);
       if (known === undefined) console.error("context-mode: unknown --agent " + arg);
       return known;
     }

@@ -36,7 +36,8 @@ function failed(agent: AgentId, raw: unknown, stage: string, err: unknown, env: 
 export async function main(argv: string[], env: NodeJS.ProcessEnv): Promise<void> {
   // Step 1: --agent <id>; unknown -> allow (no host shape to answer in).
   const i = argv.indexOf(AGENT_ARG);
-  const agent = i >= 0 ? argv[i + 1] ?? "" : "";
+  const rawAgent = i >= 0 ? argv[i + 1] ?? "" : "";
+  const agent = (rawAgent === "antigravity" || rawAgent === "agy") ? "antigravity-cli" : rawAgent;
   if (!isAgentId(agent)) {
     console.error("hooks: unknown " + AGENT_ARG + " " + JSON.stringify(agent) + ". Fix: pass " + AGENT_ARG + " with one of " + AGENT_IDS.join(", ") + ".");
     return finish(EMPTY);

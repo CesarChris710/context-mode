@@ -231,6 +231,7 @@ function hookFilesFor(ctx: SetupContext, id: AgentId): HookFile[] {
     case "claude-code": return [{ file: path.join(claudeDirOf(ctx.env, home), "settings.json"), mode: "drop" }];
     case "gemini": return [{ file: path.join(home, ".gemini", "settings.json"), mode: "drop" }];
     case "qwen": return [{ file: path.join(home, ".qwen", "settings.json"), mode: "drop" }];
+    case "antigravity-cli": return [{ file: path.join(home, ".gemini", "config", "hooks.json"), mode: "rewrite" }];
     default: return [];
   }
 }

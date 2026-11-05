@@ -14,9 +14,10 @@ type PlatformId = string;
 export const CLIENT_NAME_TO_PLATFORM: Record<string, PlatformId> = {
   "claude-code": "claude-code",
   "gemini-cli-mcp-client": "gemini-cli",
-  "antigravity-client": "antigravity",
+  "antigravity-client": "antigravity-cli",
   "antigravity-cli": "antigravity-cli",
   "agy": "antigravity-cli",
+  "antigravity": "antigravity-cli",
   "cursor-vscode": "cursor",
   "Visual-Studio-Code": "vscode-copilot",
   "copilot-cli": "copilot-cli",

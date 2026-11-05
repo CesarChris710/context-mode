@@ -554,6 +554,7 @@ export const EXTENSIONS_DIR_NAME = "extensions"; // Gemini/Qwen: <agent home>/ex
 export const AGENT_HOME_DIR: Readonly<Record<AgentId, readonly string[]>> = Object.freeze({
   "claude-code": [".claude"], codex: [".codex"], gemini: [".gemini"], qwen: [".qwen"], "copilot-cli": [".copilot"],
   vscode: [".vscode"], kiro: [".kiro"], zcode: [".zcode"], pi: [".pi"], opencode: [".config", "opencode"],
+  "antigravity-cli": [".gemini", "config"],
 });
 export const UPGRADE_RESTART_LINE = "restart needed"; // impl/07 §6 step 8
 export const UPGRADE_HOST_AREA = "host update"; // impl/07 §6 step 4
@@ -645,6 +646,7 @@ export const HOOK_HOST_FILE: Readonly<Record<AgentId, {
   zcode: { root: "home", file: [".zcode", "cli", "config.json"], key: ["hooks", "events"], shape: "zcode", timeoutKey: "timeoutMs", matcher: true },
   pi: null,
   opencode: null,
+  "antigravity-cli": { root: "home", file: [".gemini", "config", "hooks.json"], key: ["hooks"], shape: "nested", timeoutKey: "timeout", matcher: true },
 });
 export const TOOL_HOOK_EVENTS: readonly string[] = Object.freeze(["PreToolUse", "PostToolUse"]); // canonical events that carry the matcher
 export const HOOK_MATCHER_FIELD = "matcher";
@@ -857,6 +859,10 @@ export const OWN_MCP_ENTRY: Readonly<Partial<Record<AgentId, OwnMcpEntry>>> = Ob
   zcode: {
     file: [".zcode", "cli", "config.json"], key: ["mcp", "servers", SERVER_KEY],
     fields: { type: "stdio", enabled: true, timeoutMs: EXEC_TIMEOUT_MS }, also: [[ZCODE_MCP_FEATURE_KEY, true]],
+  },
+  "antigravity-cli": {
+    file: [".gemini", "config", "mcp_config.json"],
+    key: ["mcpServers", SERVER_KEY],
   },
 });
 

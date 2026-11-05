@@ -669,9 +669,18 @@ describe("ADR-0019 cli", () => {
       const link = path.join(dir, "context-mode");
       writeFileSync(self, "");
       writeFileSync(other, "");
-      symlinkSync(self, link); // the npm bin link
+      let hasSymlink = true;
+      try {
+        symlinkSync(self, link); // the npm bin link
+      } catch (err) {
+        if (process.platform === "win32" && err.code === "EPERM") {
+          hasSymlink = false;
+        } else {
+          throw err;
+        }
+      }
       assert.equal(isEntry(undefined, self, self), true);
-      assert.equal(isEntry(undefined, link, self), true);
+      if (hasSymlink) assert.equal(isEntry(undefined, link, self), true);
       assert.equal(isEntry(undefined, other, self), false);
       assert.equal(isEntry(undefined, undefined, self), false);
       assert.equal(isEntry(undefined, path.join(dir, "gone.mjs"), self), false);
