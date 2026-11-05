@@ -87,6 +87,10 @@ const ALLOWED_SKILL_FILES = [
   "skills/ctx-doctor/SKILL.md",
   "skills/ctx-upgrade/SKILL.md",
   ".claude/skills/release/SKILL.md",
+  ".antigravity-plugin/skills/context-mode/SKILL.md",
+  ".antigravity-plugin/skills/ctx-doctor/SKILL.md",
+  ".antigravity-plugin/skills/ctx-stats/SKILL.md",
+  ".antigravity-plugin/skills/ctx-upgrade/SKILL.md",
 ];
 // D-REL-MAIN-VERSION-1: the release commit (scripts/release/commit-main.mjs, build/main-tree.mjs) tracks the built plugin
 // under plugins/claude-code/ with the 3 rendered skill copies build.mjs ships (skills/ for Claude Code, Gemini and Qwen,

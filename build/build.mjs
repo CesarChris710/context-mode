@@ -290,6 +290,12 @@ async function main(outDir, sha, version) {
   copyPackageDocs(outDir, version); // D-NPM-README-1, D-NPM-README-2
   writeHashes(outDir); // §2.2 step 8: last, so SHA256SUMS covers the full tree
   assertOutTree(outDir); // read-only check of the finished tree (ADR-0019 D1)
+
+  const agyPluginDir = path.join(REPO_ROOT, ".antigravity-plugin");
+  if (existsSync(agyPluginDir)) {
+    copyFileSync(path.join(outDir, "server.mjs"), path.join(agyPluginDir, "server.bundle.mjs"));
+    copyFileSync(path.join(outDir, "hook.mjs"), path.join(agyPluginDir, "hook.bundle.mjs"));
+  }
 }
 
 try {
