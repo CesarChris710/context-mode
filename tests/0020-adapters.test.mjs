@@ -1978,6 +1978,14 @@ describe("ADR-0020 adapters", () => {
       });
       assert.equal(own.tool?.canonicalName, "ctx_execute");
 
+      const pluginNamespaced = agyDecode({
+        hookEventName: "PreToolUse",
+        conversationId: "c-1",
+        workspacePaths: ["/w"],
+        toolCall: { name: "mcp_context-mode_context-mode_ctx_execute", args: {} },
+      });
+      assert.equal(pluginNamespaced.tool?.canonicalName, "ctx_execute");
+
       const other = agyDecode({
         hookEventName: "PreToolUse",
         conversationId: "c-1",

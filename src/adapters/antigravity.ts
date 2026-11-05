@@ -21,6 +21,7 @@ const NATIVE_TO_CANONICAL: Readonly<Record<string, string>> = Object.freeze({
 });
 
 const KNOWN_PREFIXES: readonly string[] = Object.freeze([
+  "mcp_context-mode_context-mode_",
   TOOL_NAME_PREFIX,
   "mcp_context_mode_",
   "context-mode_",
