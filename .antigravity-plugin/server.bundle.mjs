@@ -44090,13 +44090,13 @@ function fileNames(name, pathExt) {
   return [...pathExt.map((ext) => name + ext), name];
 }
 function isRunnable(full) {
-  const st = statSync2(full, { throwIfNoEntry: false });
-  if (st === void 0 || !st.isFile()) return false;
-  if (isWin()) {
-    const ext = path.extname(full).toLowerCase();
-    return ext === "" || WIN_STARTABLE_EXT.includes(ext);
-  }
   try {
+    const st = statSync2(full, { throwIfNoEntry: false });
+    if (st === void 0 || !st.isFile()) return false;
+    if (isWin()) {
+      const ext = path.extname(full).toLowerCase();
+      return ext === "" || WIN_STARTABLE_EXT.includes(ext);
+    }
     accessSync(full, fsConstants.X_OK);
     return true;
   } catch {
