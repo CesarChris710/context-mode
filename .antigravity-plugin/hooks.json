@@ -1,9 +1,23 @@
 {
   "context-mode": {
     "enabled": true,
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "node hook.bundle.mjs --agent antigravity-cli",
+        "timeout": 5
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node hook.bundle.mjs --agent antigravity-cli",
+        "timeout": 5
+      }
+    ],
     "PreToolUse": [
       {
-        "matcher": "^(run_command|read_file|grep_search|web_fetch|mcp_.*_ctx_.*)$",
+        "matcher": "^(run_command|read_file|grep_search|web_fetch|mcp_context-mode_ctx_.*)$",
         "hooks": [
           {
             "type": "command",
@@ -15,7 +29,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^(run_command|read_file|grep_search|web_fetch|mcp_.*_ctx_.*)$",
+        "matcher": "^(run_command|read_file|grep_search|web_fetch|mcp_context-mode_ctx_.*)$",
         "hooks": [
           {
             "type": "command",
@@ -23,12 +37,6 @@
             "timeout": 5
           }
         ]
-      }
-    ],
-    "Stop": [
-      {
-        "type": "command",
-        "command": "node hook.bundle.mjs --agent antigravity-cli"
       }
     ]
   }

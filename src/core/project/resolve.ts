@@ -3,7 +3,7 @@
 // One project source per host. Claude Code has one fixed order (D-FU-PS-1, ADR-0001): CLAUDE_PROJECT_DIR,
 // then the hook payload cwd, then process.cwd(). Every other host: its one source; missing -> NO_PROJECT.
 // D-CI-PERF-3: node:fs through getBuiltinModule; a static ESM import of node:fs also loads fs/promises, readline and streams.
-const { existsSync, readFileSync, realpathSync, statSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+const { existsSync, readdirSync, readFileSync, realpathSync, statSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
 import { basename, dirname, join, resolve } from "node:path";
 import type { AgentId } from "../contracts/agents.ts";
 import {
@@ -50,14 +50,55 @@ function present(v: string | undefined): string | undefined {
   return v === undefined || v === "" ? undefined : v;
 }
 
+function fallbackWorktree(src: ProjectSourceInput): string | undefined {
+  if (!src.argv.includes("antigravity-cli")) return undefined;
+  try {
+    const configDir = resolveConfigDir(src.env);
+    const projectsDir = join(configDir, PROJECTS_DIR_NAME);
+    if (!existsSync(projectsDir)) return undefined;
+    const entries = readdirSync(projectsDir, { withFileTypes: true });
+    let latestDb: string | undefined;
+    let latestMtime = 0;
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const dbPath = join(projectsDir, entry.name, DB_FILE_NAME);
+      try {
+        const st = statSync(dbPath);
+        if (st.mtimeMs > latestMtime) {
+          latestMtime = st.mtimeMs;
+          latestDb = dbPath;
+        }
+      } catch {}
+    }
+    if (latestDb) {
+      const sqlite = process.getBuiltinModule("node:sqlite") as {
+        DatabaseSync?: new (path: string, options?: { readOnly?: boolean }) => {
+          prepare: (sql: string) => { get: () => unknown };
+          close: () => void;
+        };
+      } | undefined;
+      if (sqlite?.DatabaseSync) {
+        const db = new sqlite.DatabaseSync(latestDb, { readOnly: true });
+        const row = db.prepare("SELECT worktree FROM events WHERE worktree IS NOT NULL AND worktree != '' ORDER BY seq DESC LIMIT 1").get() as { worktree?: string } | undefined;
+        db.close();
+        if (row?.worktree && existsSync(row.worktree)) return row.worktree;
+      }
+    }
+  } catch {}
+  return undefined;
+}
+
 function dirOf(kind: ProjectSourceKind, src: ProjectSourceInput): string | undefined {
   switch (kind) {
     case "env:CLAUDE_PROJECT_DIR":
       // D-FU-PS-1: cwd is a common Claude Code hook input field (code.claude.com/docs/en/hooks).
       return present(src.env.CLAUDE_PROJECT_DIR) ?? present(src.cwd) ?? process.cwd();
     case "arg:--agent+cwd":
-    case "spawn-cwd":
-      return present(src.cwd);
+    case "spawn-cwd": {
+      const i = src.argv.indexOf(WORKSPACE_FOLDER_FLAG);
+      const fromArg = i < 0 ? undefined : present(src.argv[i + 1]);
+      return fromArg ?? present(src.cwd) ?? fallbackWorktree(src);
+    }
     case "arg:workspaceFolder": {
       const i = src.argv.indexOf(WORKSPACE_FOLDER_FLAG);
       return i < 0 ? undefined : present(src.argv[i + 1]);

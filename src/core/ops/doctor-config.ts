@@ -85,7 +85,7 @@ function isOwnCommand(command: unknown, agent: AgentId): command is string {
   if (!split.rest.endsWith(tail) || split.rest.length <= tail.length) return false;
   let script = split.rest.slice(0, split.rest.length - tail.length);
   if (script.startsWith(SHELL_QUOTE) && script.endsWith(SHELL_QUOTE) && script.length > 1) script = script.slice(1, -1);
-  return script === HOOK_ENTRY_FILE || HOOK_SCRIPT_SEPS.some((sep) => script.endsWith(sep + HOOK_ENTRY_FILE));
+  return script === HOOK_ENTRY_FILE || script === "hook.bundle.mjs" || HOOK_SCRIPT_SEPS.some((sep) => script.endsWith(sep + HOOK_ENTRY_FILE) || script.endsWith(sep + "hook.bundle.mjs"));
 }
 
 /** Own hook entries for one native event, per the host shape (impl/10 §1.5). */
@@ -100,14 +100,19 @@ function ownHooks(block: unknown, shape: string, timeoutKey: string, native: str
     }
     return out;
   }
-  const entries = isObject(block) ? list(block[native]) : [];
+  const root = isObject(block) && isObject(block["context-mode"]) ? (block["context-mode"] as Record<string, unknown>) : block;
+  const entries = isObject(root) ? list(root[native]) : [];
   for (const e of entries) {
     if (!isObject(e)) continue;
     if (shape === "nested" || shape === "zcode") { // zcode: matcher groups (D-HF-ZCODE-SHAPE-1)
-      for (const h of list(e[HOOK_GROUP_HOOKS_FIELD])) {
-        if (isObject(h) && isOwnCommand(h[HOOK_COMMAND_FIELD], agent)) {
-          out.push({ command: h[HOOK_COMMAND_FIELD] as string, matcher: e[HOOK_MATCHER_FIELD], timeout: h[timeoutKey] });
+      if (Array.isArray(e[HOOK_GROUP_HOOKS_FIELD])) {
+        for (const h of list(e[HOOK_GROUP_HOOKS_FIELD])) {
+          if (isObject(h) && isOwnCommand(h[HOOK_COMMAND_FIELD], agent)) {
+            out.push({ command: h[HOOK_COMMAND_FIELD] as string, matcher: e[HOOK_MATCHER_FIELD], timeout: h[timeoutKey] });
+          }
         }
+      } else if (isOwnCommand(e[HOOK_COMMAND_FIELD], agent)) {
+        out.push({ command: e[HOOK_COMMAND_FIELD] as string, matcher: e[HOOK_MATCHER_FIELD], timeout: e[timeoutKey] });
       }
     } else if (isOwnCommand(e[HOOK_COMMAND_FIELD], agent)) {
       out.push({ command: e[HOOK_COMMAND_FIELD] as string, matcher: e[HOOK_MATCHER_FIELD], timeout: e[timeoutKey] });
@@ -207,9 +212,31 @@ function opencodeListed(file: string): boolean {
   return opencodeMcpOwn(mcp[SERVER_KEY]) || (isObject(mcp.servers) && opencodeMcpOwn(mcp.servers[SERVER_KEY]));
 }
 
+function antigravityNativeMcpWrong(pluginDir: string, row: AdapterRow): boolean {
+  try {
+    const file = join(pluginDir, "mcp_config.json");
+    if (!existsSync(file)) return true;
+    const entry = hostConfigValueAt(readParsed(row.id, file).value, ["mcpServers", SERVER_KEY]);
+    if (!isObject(entry)) return true;
+    const args = list(entry[MCP_ARGS_FIELD]);
+    const script = args[0];
+    return entry.command !== HOST_NODE_COMMAND
+      || typeof script !== "string"
+      || (!script.endsWith("server.bundle.mjs") && !script.endsWith("server.mjs") && !script.endsWith(SERVER_ENTRY_FILE))
+      || args[1] !== AGENT_ARG
+      || args[2] !== row.id;
+  } catch {
+    return true;
+  }
+}
+
 function mcpWrong(row: AdapterRow, home: string, env: NodeJS.ProcessEnv, worktree: string): boolean {
   const native = row.id === "codex" ? codexNativeDir(env, home) : null;
   if (native !== null) return nativeMcpWrong(native, row);
+  if (row.id === "antigravity-cli") {
+    const pluginDir = join(home, ".gemini", "config", "plugins", "context-mode");
+    if (existsSync(join(pluginDir, "mcp_config.json"))) return antigravityNativeMcpWrong(pluginDir, row);
+  }
   const file = mcpFile(row, home, env);
   try {
     if (file === null) {
@@ -228,6 +255,10 @@ function mcpWrong(row: AdapterRow, home: string, env: NodeJS.ProcessEnv, worktre
 /** Parts of the hook block that differ from the row: entries/matcher, or timeout (D-M5-D2-2). */
 /** The host file that holds our hook entries (impl/10 §1.5); throws when the plugin root is unknown. */
 function hookFile(row: AdapterRow, spec: NonNullable<(typeof HOOK_HOST_FILE)[AgentId]>, home: string, env: NodeJS.ProcessEnv, worktree: string): string {
+  if (row.id === "antigravity-cli") {
+    const pluginHooks = join(home, ".gemini", "config", "plugins", "context-mode", HOOKS_JSON_FILE);
+    if (existsSync(pluginHooks)) return pluginHooks;
+  }
   const root = spec.root === "plugin" ? resolvePluginRoot(row, env, worktree) : spec.root === "home" ? home : worktree;
   const native = row.id === "codex" ? codexNativeDir(env, home) : null;
   const file = native !== null ? join(native, CODEX_PLUGIN_HOOKS_FILE) // D-C166-NATIVE-CWD-1: the plugin's own hook file
@@ -244,7 +275,11 @@ function hookParts(row: AdapterRow, home: string, env: NodeJS.ProcessEnv, worktr
   let block: unknown;
   try {
     const file = hookFile(row, spec, home, env, worktree);
-    block = hostConfigValueAt(readParsed(row.id, file).value, spec.key);
+    const parsedVal = readParsed(row.id, file).value;
+    block = hostConfigValueAt(parsedVal, spec.key);
+    if (!isObject(block) && row.id === "antigravity-cli") {
+      block = isObject(parsedVal) && isObject((parsedVal as Record<string, unknown>)["context-mode"]) ? (parsedVal as Record<string, unknown>)["context-mode"] : parsedVal;
+    }
     if (row.id === "codex") {
       const config = readParsed(row.id, join(codexDirOf(env, home), CONFIG_TOML_FILE)).value;
       if (hostConfigValueAt(config, CODEX_FEATURES_HOOKS_KEY) === false) return [PART_HOOKS]; // no key = true (#1152)

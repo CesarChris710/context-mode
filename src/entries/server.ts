@@ -230,9 +230,9 @@ export async function startServer(argv: string[], env: NodeJS.ProcessEnv): Promi
     return async (input: unknown, req: ServerContext) => {
       const meta = req.mcpReq._meta as Record<string, unknown> | undefined;
       const agent = resolveAgent(argv, env);
-      // D-VSCODE-ROOTS-1: VS Code (user mcp.json, spawn cwd HOME) names the workspace only in roots/list. Asked on
-      // each call, so a folder the user opens later is the project of the next call.
-      const fromRoots = agent === "vscode" && !hasWorkspaceFolder(argv) ? await workspaceFromRoots(server) : undefined;
+      // D-VSCODE-ROOTS-1: VS Code and Antigravity (user mcp.json/plugin, spawn cwd HOME or plugin cache) name the workspace in roots/list.
+      // Asked on each call, so a folder the user opens later is the project of the next call.
+      const fromRoots = (agent === "vscode" || agent === "antigravity-cli") && !hasWorkspaceFolder(argv) ? await workspaceFromRoots(server) : undefined;
       const callArgv = fromRoots === undefined ? argv : [...argv, WORKSPACE_FOLDER_FLAG, fromRoots];
       // §5 step 6a, 7a: resolved lazily, at most once per call, never cached across calls.
       let project: ProjectContext | undefined;

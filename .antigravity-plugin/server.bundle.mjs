@@ -28253,7 +28253,10 @@ var BACKGROUND_REPLY_PREFIX = "started in background, pid ";
 var PLAIN_OUTPUT_ENV = Object.freeze({ NO_COLOR: "1", FORCE_COLOR: "0" });
 var RUN_LABEL_PREFIX = "run.mjs:";
 var RUN_SESSION_PREFIX = "mcp:";
-var HOST_SESSION_ENV = Object.freeze({ "claude-code": "CLAUDE_CODE_SESSION_ID" });
+var HOST_SESSION_ENV = Object.freeze({
+  "claude-code": "CLAUDE_CODE_SESSION_ID",
+  "antigravity-cli": "ANTIGRAVITY_CONVERSATION_ID"
+});
 var NODE_MIN = "24.15.0";
 var DATA_ROOT = "~/.context-mode";
 var DATA_DIR_ENV = "CONTEXT_MODE_DATA_DIR";
@@ -29666,7 +29669,7 @@ function sha256Hex(text) {
 }
 
 // src/core/project/resolve.ts
-var { existsSync: existsSync2, readFileSync, realpathSync: realpathSync3, statSync } = process.getBuiltinModule("node:fs");
+var { existsSync: existsSync2, readdirSync, readFileSync, realpathSync: realpathSync3, statSync } = process.getBuiltinModule("node:fs");
 function sourceOf(agent) {
   switch (agent) {
     case "claude-code":
@@ -29690,13 +29693,50 @@ function sourceOf(agent) {
 function present(v) {
   return v === void 0 || v === "" ? void 0 : v;
 }
+function fallbackWorktree(src) {
+  if (!src.argv.includes("antigravity-cli")) return void 0;
+  try {
+    const configDir = resolveConfigDir(src.env);
+    const projectsDir = join3(configDir, PROJECTS_DIR_NAME);
+    if (!existsSync2(projectsDir)) return void 0;
+    const entries = readdirSync(projectsDir, { withFileTypes: true });
+    let latestDb;
+    let latestMtime = 0;
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const dbPath = join3(projectsDir, entry.name, DB_FILE_NAME);
+      try {
+        const st = statSync(dbPath);
+        if (st.mtimeMs > latestMtime) {
+          latestMtime = st.mtimeMs;
+          latestDb = dbPath;
+        }
+      } catch {
+      }
+    }
+    if (latestDb) {
+      const sqlite = process.getBuiltinModule("node:sqlite");
+      if (sqlite?.DatabaseSync) {
+        const db = new sqlite.DatabaseSync(latestDb, { readOnly: true });
+        const row5 = db.prepare("SELECT worktree FROM events WHERE worktree IS NOT NULL AND worktree != '' ORDER BY seq DESC LIMIT 1").get();
+        db.close();
+        if (row5?.worktree && existsSync2(row5.worktree)) return row5.worktree;
+      }
+    }
+  } catch {
+  }
+  return void 0;
+}
 function dirOf(kind, src) {
   switch (kind) {
     case "env:CLAUDE_PROJECT_DIR":
       return present(src.env.CLAUDE_PROJECT_DIR) ?? present(src.cwd) ?? process.cwd();
     case "arg:--agent+cwd":
-    case "spawn-cwd":
-      return present(src.cwd);
+    case "spawn-cwd": {
+      const i = src.argv.indexOf(WORKSPACE_FOLDER_FLAG);
+      const fromArg = i < 0 ? void 0 : present(src.argv[i + 1]);
+      return fromArg ?? present(src.cwd) ?? fallbackWorktree(src);
+    }
     case "arg:workspaceFolder": {
       const i = src.argv.indexOf(WORKSPACE_FOLDER_FLAG);
       return i < 0 ? void 0 : present(src.argv[i + 1]);
@@ -29795,7 +29835,7 @@ function resolveProject(agent, src) {
 }
 
 // src/core/store/cleanup.ts
-import { existsSync as existsSync3, readdirSync as readdirSync2, rmSync as rmSync3 } from "node:fs";
+import { existsSync as existsSync3, readdirSync as readdirSync3, rmSync as rmSync3 } from "node:fs";
 import { join as join5 } from "node:path";
 
 // src/core/store/snippet.ts
@@ -32335,7 +32375,7 @@ function queryUnits(db, sessionId, q, limit) {
 }
 
 // src/core/store/owners.ts
-import { mkdirSync as mkdirSync3, readdirSync, readFileSync as readFileSync2, rmSync as rmSync2, writeFileSync } from "node:fs";
+import { mkdirSync as mkdirSync3, readdirSync as readdirSync2, readFileSync as readFileSync2, rmSync as rmSync2, writeFileSync } from "node:fs";
 import { basename as basename3, join as join4 } from "node:path";
 function ownersDir(configDir, projectKey) {
   return join4(configDir, PROJECTS_DIR_NAME, projectKey, OWNERS_DIR_NAME);
@@ -32368,7 +32408,7 @@ function listLiveOwners(configDir, projectKey) {
   const dir = ownersDir(configDir, projectKey);
   let names;
   try {
-    names = readdirSync(dir);
+    names = readdirSync2(dir);
   } catch (err) {
     if (errCode(err) === "ENOENT") return [];
     throw err;
@@ -32461,7 +32501,7 @@ function sweepOne(configDir, projectKey, cutoff) {
 function sweepDeadProjects(configDir) {
   let entries;
   try {
-    entries = readdirSync2(join5(configDir, PROJECTS_DIR_NAME), { withFileTypes: true });
+    entries = readdirSync3(join5(configDir, PROJECTS_DIR_NAME), { withFileTypes: true });
   } catch (err) {
     if (err.code === "ENOENT") return [];
     throw err;
@@ -44189,7 +44229,7 @@ function runProcess(argv, o) {
 }
 
 // src/core/index/auto-memory.ts
-import { readdirSync as readdirSync3, readFileSync as readFileSync3, statSync as statSync3 } from "node:fs";
+import { readdirSync as readdirSync4, readFileSync as readFileSync3, statSync as statSync3 } from "node:fs";
 import { join as join6 } from "node:path";
 var MEMORY_FILES = Object.freeze([
   Object.freeze(["CLAUDE.md"]),
@@ -44204,7 +44244,7 @@ var KIRO_STEERING = Object.freeze([".kiro", "steering"]);
 var MD = ".md";
 function steeringFiles(worktree) {
   try {
-    return readdirSync3(join6(worktree, ...KIRO_STEERING)).filter((n) => n.endsWith(MD)).sort().map((n) => [...KIRO_STEERING, n]);
+    return readdirSync4(join6(worktree, ...KIRO_STEERING)).filter((n) => n.endsWith(MD)).sort().map((n) => [...KIRO_STEERING, n]);
   } catch {
     return [];
   }
@@ -44848,7 +44888,7 @@ var ctxBatch = Object.freeze({
 });
 
 // src/core/tools/doctor.ts
-import { readdirSync as readdirSync7, readFileSync as readFileSync11, existsSync as existsSync16 } from "node:fs";
+import { readdirSync as readdirSync8, readFileSync as readFileSync11, existsSync as existsSync16 } from "node:fs";
 import { basename as basename5, join as join16 } from "node:path";
 
 // src/adapters/claude-code.ts
@@ -46094,11 +46134,11 @@ function ownBundleDir() {
 }
 
 // src/core/ops/doctor-config.ts
-import { existsSync as existsSync9, readdirSync as readdirSync6 } from "node:fs";
+import { existsSync as existsSync9, readdirSync as readdirSync7 } from "node:fs";
 import { join as join11 } from "node:path";
 
 // src/core/ops/detect-v1.ts
-import { existsSync as existsSync6, opendirSync, readdirSync as readdirSync4, readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync6, opendirSync, readdirSync as readdirSync5, readFileSync as readFileSync5 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join9 } from "node:path";
 
@@ -48858,7 +48898,7 @@ function scanVscode(agentHome, project, out) {
 }
 function jsonFiles(dir) {
   try {
-    return readdirSync4(dir).filter((name) => name.endsWith(KIRO_AGENT_FILE_EXT)).sort();
+    return readdirSync5(dir).filter((name) => name.endsWith(KIRO_AGENT_FILE_EXT)).sort();
   } catch {
     return [];
   }
@@ -48991,7 +49031,7 @@ function detectV1(agent, home, scope = {}) {
 }
 
 // src/core/ops/plugin-root.ts
-import { existsSync as existsSync7, readdirSync as readdirSync5, readFileSync as readFileSync6, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync7, readdirSync as readdirSync6, readFileSync as readFileSync6, realpathSync as realpathSync4 } from "node:fs";
 import { dirname as dirname6, isAbsolute, join as join10, sep as sep2 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function missing(agent, path8) {
@@ -49091,7 +49131,7 @@ function marketplaceRoot(adapter, env, worktree) {
   if (ownReal !== null && cacheReal !== null && ownReal.startsWith(cacheReal + sep2) && existsSync7(join10(ownReal, SERVER_ENTRY_FILE))) return ownReal;
   const pattern = join10(cache, "*", PLUGIN_NAME);
   if (!existsSync7(cache)) throw missing(adapter.id, pattern);
-  const found = readdirSync5(cache).sort().map((marketplace) => join10(cache, marketplace, PLUGIN_NAME)).filter((dir) => existsSync7(dir));
+  const found = readdirSync6(cache).sort().map((marketplace) => join10(cache, marketplace, PLUGIN_NAME)).filter((dir) => existsSync7(dir));
   if (found.length !== 1) throw missing(adapter.id, found.length === 0 ? pattern : found.join(", "));
   return found[0];
 }
@@ -49247,7 +49287,7 @@ function isOwnCommand(command, agent) {
   if (!split.rest.endsWith(tail) || split.rest.length <= tail.length) return false;
   let script = split.rest.slice(0, split.rest.length - tail.length);
   if (script.startsWith(SHELL_QUOTE) && script.endsWith(SHELL_QUOTE) && script.length > 1) script = script.slice(1, -1);
-  return script === HOOK_ENTRY_FILE || HOOK_SCRIPT_SEPS.some((sep3) => script.endsWith(sep3 + HOOK_ENTRY_FILE));
+  return script === HOOK_ENTRY_FILE || script === "hook.bundle.mjs" || HOOK_SCRIPT_SEPS.some((sep3) => script.endsWith(sep3 + HOOK_ENTRY_FILE) || script.endsWith(sep3 + "hook.bundle.mjs"));
 }
 function ownHooks(block, shape, timeoutKey, native, agent) {
   const out = [];
@@ -49260,14 +49300,19 @@ function ownHooks(block, shape, timeoutKey, native, agent) {
     }
     return out;
   }
-  const entries = isObject4(block) ? list(block[native]) : [];
+  const root = isObject4(block) && isObject4(block["context-mode"]) ? block["context-mode"] : block;
+  const entries = isObject4(root) ? list(root[native]) : [];
   for (const e of entries) {
     if (!isObject4(e)) continue;
     if (shape === "nested" || shape === "zcode") {
-      for (const h of list(e[HOOK_GROUP_HOOKS_FIELD])) {
-        if (isObject4(h) && isOwnCommand(h[HOOK_COMMAND_FIELD], agent)) {
-          out.push({ command: h[HOOK_COMMAND_FIELD], matcher: e[HOOK_MATCHER_FIELD], timeout: h[timeoutKey] });
+      if (Array.isArray(e[HOOK_GROUP_HOOKS_FIELD])) {
+        for (const h of list(e[HOOK_GROUP_HOOKS_FIELD])) {
+          if (isObject4(h) && isOwnCommand(h[HOOK_COMMAND_FIELD], agent)) {
+            out.push({ command: h[HOOK_COMMAND_FIELD], matcher: e[HOOK_MATCHER_FIELD], timeout: h[timeoutKey] });
+          }
         }
+      } else if (isOwnCommand(e[HOOK_COMMAND_FIELD], agent)) {
+        out.push({ command: e[HOOK_COMMAND_FIELD], matcher: e[HOOK_MATCHER_FIELD], timeout: e[timeoutKey] });
       }
     } else if (isOwnCommand(e[HOOK_COMMAND_FIELD], agent)) {
       out.push({ command: e[HOOK_COMMAND_FIELD], matcher: e[HOOK_MATCHER_FIELD], timeout: e[timeoutKey] });
@@ -49303,10 +49348,10 @@ function codexNativeDir(env, home) {
   const cache = join11(codexDir, "plugins", PLUGIN_CACHE_DIR_NAME);
   if (!existsSync9(cache)) return null;
   const found = [];
-  for (const market of readdirSync6(cache)) {
+  for (const market of readdirSync7(cache)) {
     const plugin = join11(cache, market, SERVER_KEY);
     if (!existsSync9(plugin)) continue;
-    for (const version4 of readdirSync6(plugin).sort()) {
+    for (const version4 of readdirSync7(plugin).sort()) {
       const dir = join11(plugin, version4, CODEX_PLUGIN_SUBDIR);
       if (existsSync9(join11(dir, CODEX_PLUGIN_MCP_FILE))) found.push(dir);
     }
@@ -49344,9 +49389,26 @@ function opencodeListed(file2) {
   const mcp = isObject4(value) && isObject4(value.mcp) ? value.mcp : {};
   return opencodeMcpOwn(mcp[SERVER_KEY]) || isObject4(mcp.servers) && opencodeMcpOwn(mcp.servers[SERVER_KEY]);
 }
+function antigravityNativeMcpWrong(pluginDir, row5) {
+  try {
+    const file2 = join11(pluginDir, "mcp_config.json");
+    if (!existsSync9(file2)) return true;
+    const entry = hostConfigValueAt(readParsed(row5.id, file2).value, ["mcpServers", SERVER_KEY]);
+    if (!isObject4(entry)) return true;
+    const args = list(entry[MCP_ARGS_FIELD]);
+    const script = args[0];
+    return entry.command !== HOST_NODE_COMMAND || typeof script !== "string" || !script.endsWith("server.bundle.mjs") && !script.endsWith("server.mjs") && !script.endsWith(SERVER_ENTRY_FILE) || args[1] !== AGENT_ARG || args[2] !== row5.id;
+  } catch {
+    return true;
+  }
+}
 function mcpWrong(row5, home, env, worktree) {
   const native = row5.id === "codex" ? codexNativeDir(env, home) : null;
   if (native !== null) return nativeMcpWrong(native, row5);
+  if (row5.id === "antigravity-cli") {
+    const pluginDir = join11(home, ".gemini", "config", "plugins", "context-mode");
+    if (existsSync9(join11(pluginDir, "mcp_config.json"))) return antigravityNativeMcpWrong(pluginDir, row5);
+  }
   const file2 = mcpFile(row5, home, env);
   try {
     if (file2 === null) {
@@ -49361,6 +49423,10 @@ function mcpWrong(row5, home, env, worktree) {
   }
 }
 function hookFile(row5, spec, home, env, worktree) {
+  if (row5.id === "antigravity-cli") {
+    const pluginHooks = join11(home, ".gemini", "config", "plugins", "context-mode", HOOKS_JSON_FILE);
+    if (existsSync9(pluginHooks)) return pluginHooks;
+  }
   const root = spec.root === "plugin" ? resolvePluginRoot(row5, env, worktree) : spec.root === "home" ? home : worktree;
   const native = row5.id === "codex" ? codexNativeDir(env, home) : null;
   const file2 = native !== null ? join11(native, CODEX_PLUGIN_HOOKS_FILE) : row5.id === "codex" ? join11(codexDirOf(env, home), HOOKS_JSON_FILE) : row5.id === "copilot-cli" ? join11(copilotDirOf(env, home), ...spec.file.slice(1)) : row5.id === "kiro" ? join11(kiroDirOf(env, home), ...spec.file.slice(1)) : join11(root, ...spec.file);
@@ -49372,7 +49438,11 @@ function hookParts(row5, home, env, worktree) {
   let block;
   try {
     const file2 = hookFile(row5, spec, home, env, worktree);
-    block = hostConfigValueAt(readParsed(row5.id, file2).value, spec.key);
+    const parsedVal = readParsed(row5.id, file2).value;
+    block = hostConfigValueAt(parsedVal, spec.key);
+    if (!isObject4(block) && row5.id === "antigravity-cli") {
+      block = isObject4(parsedVal) && isObject4(parsedVal["context-mode"]) ? parsedVal["context-mode"] : parsedVal;
+    }
     if (row5.id === "codex") {
       const config4 = readParsed(row5.id, join11(codexDirOf(env, home), CONFIG_TOML_FILE)).value;
       if (hostConfigValueAt(config4, CODEX_FEATURES_HOOKS_KEY) === false) return [PART_HOOKS];
@@ -50621,7 +50691,7 @@ async function hookRow(ctx, adapter, host) {
 function ownServerId(configDir, projectKey) {
   const dir = join16(configDir, PROJECTS_DIR_NAME, projectKey, OWNERS_DIR_NAME);
   if (!existsSync16(dir)) return "";
-  for (const name of readdirSync7(dir)) {
+  for (const name of readdirSync8(dir)) {
     if (!name.endsWith(OWNER_PID_EXT)) continue;
     if (readFileSync11(join16(dir, name), "utf8").trim() === String(process.pid)) return basename5(name, OWNER_PID_EXT);
   }
@@ -50964,7 +51034,7 @@ import { existsSync as existsSync18, readFileSync as readFileSync13, statSync as
 import { dirname as dirname10, extname, join as join19, relative as relative3, resolve as resolve5 } from "node:path";
 
 // src/core/index/walk.ts
-import { readdirSync as readdirSync8, readFileSync as readFileSync12, realpathSync as realpathSync10, statSync as statSync6 } from "node:fs";
+import { readdirSync as readdirSync9, readFileSync as readFileSync12, realpathSync as realpathSync10, statSync as statSync6 } from "node:fs";
 import { join as join18 } from "node:path";
 var GITIGNORE = ".gitignore";
 var GIT_DIR = ".git";
@@ -50979,7 +51049,7 @@ function walkDir(root, containmentRoot) {
 function visit(abs, rel, parent, contain, seen, found) {
   let entries;
   try {
-    entries = readdirSync8(abs, { withFileTypes: true });
+    entries = readdirSync9(abs, { withFileTypes: true });
   } catch {
     return;
   }
@@ -56047,7 +56117,7 @@ function regenerateHostConfig(row5, home, opts = {}) {
 }
 
 // src/core/ops/uninstall.ts
-import { existsSync as existsSync20, readdirSync as readdirSync9, rmSync as rmSync7, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync20, readdirSync as readdirSync10, rmSync as rmSync7, writeFileSync as writeFileSync6 } from "node:fs";
 import { join as join21 } from "node:path";
 function row2(area, before, after) {
   return { area, before, after };
@@ -56163,7 +56233,7 @@ function removeProjectData(configDir, projectKey) {
   const dir = join21(projects, projectKey);
   if (!existsSync20(dir)) return row2(UPGRADE_DATA_AREA, "", UPGRADE_NOT_FOUND);
   if (dir === projects || !isInside(projects, dir)) throw new CtxError("OUTSIDE_ROOT", { p: dir, root: projects });
-  for (const name of readdirSync9(dir)) {
+  for (const name of readdirSync10(dir)) {
     if (name !== OWNERS_DIR_NAME) rmSync7(join21(dir, name), { recursive: true, force: true });
   }
   return row2(UPGRADE_DATA_AREA, dir, UPGRADE_DATA_DELETED);
@@ -56602,7 +56672,7 @@ async function startServer(argv, env) {
     return async (input, req) => {
       const meta3 = req.mcpReq._meta;
       const agent = resolveAgent(argv, env);
-      const fromRoots = agent === "vscode" && !hasWorkspaceFolder(argv) ? await workspaceFromRoots(server) : void 0;
+      const fromRoots = (agent === "vscode" || agent === "antigravity-cli") && !hasWorkspaceFolder(argv) ? await workspaceFromRoots(server) : void 0;
       const callArgv = fromRoots === void 0 ? argv : [...argv, WORKSPACE_FOLDER_FLAG, fromRoots];
       let project;
       const projectOf = () => {
