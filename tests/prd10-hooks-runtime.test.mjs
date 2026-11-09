@@ -756,8 +756,15 @@ describe("PRD-v2 section 10: dispatch, replace and handle line (GP3, GP6)", () =
     try {
       writeFileSync(join(outside, "secret.txt"), secret);
       writeFileSync(join(other, "out.txt"), secret);
-      symlinkSync(join(outside, "secret.txt"), join(mine, "link.txt"));
-      for (const file of [join(outside, "secret.txt"), join(other, "out.txt"), join(mine, "link.txt"), join(mine, "..", "..", "other-session", "tool-results", "out.txt")]) {
+      let hasSymlink = true;
+      try {
+        symlinkSync(join(outside, "secret.txt"), join(mine, "link.txt"));
+      } catch (err) {
+        if (process.platform === "win32" && err.code === "EPERM") hasSymlink = false;
+        else throw err;
+      }
+      const files = [join(outside, "secret.txt"), join(other, "out.txt"), ...(hasSymlink ? [join(mine, "link.txt")] : []), join(mine, "..", "..", "other-session", "tool-results", "out.txt")];
+      for (const file of files) {
         const p = { ...mainBashPost(head, ""), session_id: u.session_id };
         p.tool_input = { command: "cat data/part3.txt" };
         p.tool_response = { stdout: head, stderr: "", interrupted: false, persistedOutputPath: file, persistedOutputSize: Buffer.byteLength(secret) };
@@ -2180,7 +2187,7 @@ describe("PRD-v2 section 10: saving decision per host (ADR-0020)", () => {
   // the ctx tool on PreToolUse everywhere else. One effect per host, no fallback.
   const SAVING = {
     "claude-code": "R", codex: "D", gemini: "R", qwen: "D", "copilot-cli": "R",
-    vscode: "D", kiro: "D", zcode: "D", pi: "R", opencode: "D",
+    vscode: "D", kiro: "D", zcode: "D", pi: "R", opencode: "D", "antigravity-cli": "D",
   };
   // D-M3-F-9: a hook or detached write keeps its DB handle open by design (A21), and Windows cannot delete
   // an open file, so temp cleanup there is best-effort. The assertions are unchanged.
@@ -2686,7 +2693,7 @@ describe("PRD-v2 section 10: host tool names in hook output", () => {
     try {
       const big = path.join(dir, "big.log");
       writeFileSync(big, "x".repeat(300 * 1024));
-      assert.equal(ADAPTERS.length, 10);
+      assert.equal(ADAPTERS.length, 11);
       for (const row of ADAPTERS) {
         const d = decide(ev(row, dir, "Read", "Read", { file_path: big }), row, []);
         assert.equal(d.kind, "deny", row.id);

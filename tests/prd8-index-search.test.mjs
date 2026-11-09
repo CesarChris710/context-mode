@@ -162,11 +162,18 @@ describe("PRD-v2 section 8: stage 1 (concurrent)", { concurrency: CONC }, () => 
         mkdirSync(join(outside, "steering"), { recursive: true });
         writeFileSync(join(outside, "AGENTS.md"), "outsideword secret\n");
         writeFileSync(join(outside, "steering", "rules.md"), "outsideword steering\n");
-        symlinkSync(join(outside, "AGENTS.md"), join(root, "AGENTS.md"));
-        mkdirSync(join(root, ".kiro"));
-        symlinkSync(join(outside, "steering"), join(root, ".kiro", "steering"));
-        mkdirSync(join(root, ".github"));
-        symlinkSync(join(outside, "AGENTS.md"), join(root, ".github", "copilot-instructions.md"));
+        let hasSymlink = true;
+        try {
+          symlinkSync(join(outside, "AGENTS.md"), join(root, "AGENTS.md"));
+          mkdirSync(join(root, ".kiro"));
+          symlinkSync(join(outside, "steering"), join(root, ".kiro", "steering"));
+          mkdirSync(join(root, ".github"));
+          symlinkSync(join(outside, "AGENTS.md"), join(root, ".github", "copilot-instructions.md"));
+        } catch (err) {
+          if (process.platform === "win32" && err.code === "EPERM") hasSymlink = false;
+          else throw err;
+        }
+        if (!hasSymlink) return;
         try {
           for (const agent of ["claude-code", "codex", "kiro", "copilot-cli"]) {
             const out = await ctxSearch.handler({ queries: ["outsideword"] }, memCtx(root, agent));
