@@ -97,8 +97,6 @@ export function parseFlags(cmd: Command, argv: readonly string[]): Flags {
         f.print = norm as AgentId;
         break;
       }
-        break;
-      }
       case "--agents": {
         const ids = value!.split(",").map((s) => s.trim()).filter(Boolean).map((s) => (s === "agy" || s === "antigravity" ? "antigravity-cli" : s));
         for (const id of ids) {

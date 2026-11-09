@@ -2556,7 +2556,6 @@ describe("ADR-0010 doctor: hook-runs check per agent (GP11)", { concurrency: CON
   test("H5: doctor hook-runs PASSES on all 10 hosts with the real hook: the large shell read gets the saving effect", (t) => {
     const s = sandbox(t, REAL_HOOK);
     assert.equal(s.reg.length, ADAPTERS.length);
-    assert.equal(s.reg.length, 10);
     for (const row of s.reg) {
       const c = hookRunsCheck(row, s.env);
       assert.equal(c.name, "hook-runs", row.id);

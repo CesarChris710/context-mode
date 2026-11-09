@@ -148,5 +148,19 @@
       },
       "directory": "/tmp/project"
     }
+  },
+  "antigravity-cli": {
+    "event": "PreToolUse",
+    "payload": {
+      "hookEventName": "PreToolUse",
+      "conversationId": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+      "cwd": "/tmp/project",
+      "toolCall": {
+        "name": "run_command",
+        "args": {
+          "CommandLine": "echo gp3-fixture-probe"
+        }
+      }
+    }
   }
 }

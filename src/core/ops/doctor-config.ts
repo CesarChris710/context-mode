@@ -242,7 +242,6 @@ function opencodeListed(file: string, worktree: string): boolean {
   const dirs = [dirname(file), worktree];
   return dirs.some((dir) => OPENCODE_CONFIG_FILES.some((name) => opencodeValueListed(opencodeFileValue(join(dir, name)))));
 }
-}
 
 function mcpWrong(row: AdapterRow, home: string, env: NodeJS.ProcessEnv, worktree: string): boolean {
   const native = row.id === "codex" ? codexNativeDir(env, home) : null;

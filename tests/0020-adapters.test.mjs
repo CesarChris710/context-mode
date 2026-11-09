@@ -2122,6 +2122,8 @@ describe("ADR-0020 adapters", () => {
 
       const post = { event: "PostToolUse", agent: "antigravity-cli", sessionId: "s", cwd: "/w" };
       assert.deepEqual(agyEncode(post, { kind: "hint", text: "ignored", onceKey: "k" }), { stdout: "{}", exitCode: 0 });
+    });
+  });
 
   // D-HOST-SCHEMAS-1: tests/fixtures/host-schemas/<agent>.json holds each host's own hook reply rules, read from the host
   // source named in the file. Every encode reply on representative events must be empty or valid for its host and event.
