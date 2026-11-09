@@ -514,7 +514,7 @@ describe("ADR-0010 doctor D3, D4, D5b: host config, double fire, v1 leftovers", 
   });
 });
 
-describe("ADR-0010 doctor D3 on Antigravity: one clear line, no Gemini CLI claims (D-1340-AGY-D3-1)", { concurrency: CONC }, () => {
+describe.skip("ADR-0010 doctor D3 on Antigravity: one clear line, no Gemini CLI claims (D-1340-AGY-D3-1) [skipped: Antigravity is supported in this fork]", { concurrency: CONC }, () => {
   // #1340 (nahiarhd, filed by an Antigravity agent): "D3 host config FAIL: wrong: MCP entry, hook entries", fix
   // "context-mode setup --agents gemini", bundle ~/.gemini/config/plugins/context-mode/server, D5 D6 D8 PASS.
   const KEY = "e".repeat(16);
@@ -616,7 +616,7 @@ describe("ADR-0010 doctor on every unsupported host: one clear line, no false FA
 
   test("[D-UNSUPPORTED-HOSTS-1] the list holds the removed 2.0 hosts, each with a source line", () => {
     const ids = C.UNSUPPORTED_HOSTS.map((h) => h.id).sort();
-    assert.deepEqual(ids, ["antigravity", "cursor", "jetbrains-copilot", "kilo", "kimi", "omp", "openclaw", "zed"]);
+    assert.deepEqual(ids, ["cursor", "jetbrains-copilot", "kilo", "kimi", "omp", "openclaw", "zed"]);
     for (const h of C.UNSUPPORTED_HOSTS) assert.ok(h.source.includes(":"), h.id);
   });
 
@@ -2008,6 +2008,7 @@ describe("ADR-0010 upgrade step 4b: SHA256SUMS check", { concurrency: CONC }, ()
   // review-M5 open note, D-M6-V1-1: the walk takes only regular files and dirs; a symlink is a mismatch,
   // even when the target's bytes match the listed hash.
   test("a symlink to a file whose bytes match still throws (D-M6-V1-1)", (t) => {
+    if (process.platform === "win32") { t.skip("symlinks require admin on Windows"); return; }
     const dir = tree(t, FILES);
     const outside = tmp(t);
     writeFileSync(path.join(outside, "server.mjs"), FILES["server.mjs"]);
@@ -2018,6 +2019,7 @@ describe("ADR-0010 upgrade step 4b: SHA256SUMS check", { concurrency: CONC }, ()
   });
 
   test("a symlink to a dir throws (D-M6-V1-1)", (t) => {
+    if (process.platform === "win32") { t.skip("symlinks require admin on Windows"); return; }
     const dir = tree(t, FILES);
     const outside = tree(t, { "c.json": "{}" });
     rmSync(path.join(dir, "a", "b"), { recursive: true });
@@ -2027,6 +2029,7 @@ describe("ADR-0010 upgrade step 4b: SHA256SUMS check", { concurrency: CONC }, ()
   });
 
   test("a symlinked SHA256SUMS throws (D-M6-V1-1)", (t) => {
+    if (process.platform === "win32") { t.skip("symlinks require admin on Windows"); return; }
     const dir = tree(t, FILES);
     const outside = tmp(t);
     writeSums(outside, FILES);

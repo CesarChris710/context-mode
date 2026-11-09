@@ -28675,16 +28675,6 @@ function D3_ROOT_DETAIL(paths) {
 var unsupported = (h) => Object.freeze(h);
 var UNSUPPORTED_HOSTS = Object.freeze([
   unsupported({
-    id: "antigravity",
-    name: "Antigravity",
-    clientNames: ["antigravity", "antigravity-client", "antigravity-cli", "agy"],
-    envVars: ["ANTIGRAVITY_CLI_ALIAS"],
-    pluginPaths: [[".gemini", "config", "plugins"], [".gemini", "antigravity", "plugins"], [".gemini", "antigravity-cli", "plugins"], [".gemini", "antigravity-ide", "plugins"]],
-    configDirs: [".gemini/antigravity", ".gemini/antigravity-cli", ".gemini/config"],
-    binaries: ["agy"],
-    source: "v1.0.169:src/adapters/client-map.ts:15-17; detect.ts:156,481-483; #1340"
-  }),
-  unsupported({
     id: "cursor",
     name: "Cursor",
     clientNames: ["cursor-vscode"],

@@ -695,9 +695,6 @@ export function D3_ROOT_DETAIL(paths: readonly string[]): string { return `pick 
 export interface UnsupportedHost { id: string; name: string; clientNames: readonly string[]; envVars: readonly string[]; pluginPaths: readonly (readonly string[])[]; configDirs: readonly string[]; binaries: readonly string[]; source: string; }
 const unsupported = (h: UnsupportedHost): UnsupportedHost => Object.freeze(h);
 export const UNSUPPORTED_HOSTS: readonly UnsupportedHost[] = Object.freeze([
-  unsupported({ id: "antigravity", name: "Antigravity", clientNames: ["antigravity", "antigravity-client", "antigravity-cli", "agy"], envVars: ["ANTIGRAVITY_CLI_ALIAS"],
-    pluginPaths: [[".gemini", "config", "plugins"], [".gemini", "antigravity", "plugins"], [".gemini", "antigravity-cli", "plugins"], [".gemini", "antigravity-ide", "plugins"]],
-    configDirs: [".gemini/antigravity", ".gemini/antigravity-cli", ".gemini/config"], binaries: ["agy"], source: "v1.0.169:src/adapters/client-map.ts:15-17; detect.ts:156,481-483; #1340" }),
   unsupported({ id: "cursor", name: "Cursor", clientNames: ["cursor-vscode"], envVars: ["CURSOR_TRACE_ID", "CURSOR_CLI", "CURSOR_CWD"],
     pluginPaths: [], configDirs: [".cursor"], binaries: [], source: "v1.0.169:src/adapters/client-map.ts:18; detect.ts:163-165,584" }),
   unsupported({ id: "omp", name: "OMP (oh-my-pi)", clientNames: ["omp-coding-agent"], envVars: [],
