@@ -302,6 +302,9 @@ async function main(outDir, sha, version) {
   if (existsSync(agyPluginDir)) {
     copyFileSync(path.join(outDir, "server.mjs"), path.join(agyPluginDir, "server.bundle.mjs"));
     copyFileSync(path.join(outDir, "hook.mjs"), path.join(agyPluginDir, "hook.bundle.mjs"));
+    const agyFixturesDir = path.join(agyPluginDir, "fixtures");
+    if (!existsSync(agyFixturesDir)) mkdirSync(agyFixturesDir, { recursive: true });
+    copyFileSync(path.join(outDir, FIXTURE_OUT), path.join(agyFixturesDir, "hook-roundtrip.json"));
   }
 }
 
