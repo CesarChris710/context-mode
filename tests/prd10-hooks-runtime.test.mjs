@@ -13,7 +13,7 @@ import { ctxSearch } from "../src/core/tools/search.ts";
 import { ctxStats } from "../src/core/tools/stats.ts";
 import { chunkText } from "../src/core/index/chunk.ts";
 import { getAdapter, ADAPTERS, hasRecall, hasReplace } from "../src/adapters/table.ts";
-import { COMPACT_POINTER_LINE, OUTPUT_CAP, REPLACE_TRIGGER_BYTES, REPLACE_RETURN_BYTES, REPLACE_CHUNK_BYTES, SYNC_INDEX_MAX_BYTES, PENDING_COMPACT_META_PREFIX, DECISION_OPTION_KEY, DECISION_SOURCE, RECALL_BUDGET_BYTES, RECALL_CLOSE_TAG, RECALL_OPEN_TAG, STATE_BUDGET, D5_LAST_HOOK_ERROR, MCP_HINT_EVERY, PARSE_ERROR_DENY_LINE, POLICY_UNREADABLE_LINE, REPLACE_HANDLE_LINE, REQUIRE_SECURITY_ENV, TOOL_ORDER, prefixToolNames } from "../src/core/contracts/constants.ts";
+import { COMPACT_POINTER_LINE, OUTPUT_CAP, REPLACE_TRIGGER_BYTES, REPLACE_RETURN_BYTES, REPLACE_CHUNK_BYTES, SYNC_INDEX_MAX_BYTES, PENDING_COMPACT_META_PREFIX, DECISION_OPTION_KEY, DECISION_SOURCE, RECALL_BUDGET_BYTES, RECALL_CLOSE_TAG, RECALL_OPEN_TAG, STATE_BUDGET, HOOK_TIMEOUT_MS,D5_LAST_HOOK_ERROR, MCP_HINT_EVERY, PARSE_ERROR_DENY_LINE, POLICY_UNREADABLE_LINE, REPLACE_HANDLE_LINE, REQUIRE_SECURITY_ENV, TOOL_ORDER, prefixToolNames } from "../src/core/contracts/constants.ts";
 import { answerDecisions, askOptionLabels, listOptionLabels, optionEchoDecision } from "../src/core/hooks/decision.ts";
 import { decode } from "../src/adapters/claude-code.ts";
 import { openDb, closeDb, withWrite, metaGet } from "../src/core/store/db.ts";
@@ -455,6 +455,22 @@ describe("PRD-v2 section 10: dispatch, replace and handle line (GP3, GP6)", () =
     }
     const full = cc({ hook_event_name: "PostToolUse", tool_name: "Read", tool_input: { file_path: "/tmp/big.log" }, tool_use_id: "toolu_f", tool_response: { type: "text", file } });
     assert.equal(typeof parsed(await handleHook("claude-code", full, env)).updatedToolOutput, "object", "a full Read over the trigger still replaces");
+  });
+
+  // D-R48-OWN-FILE-1 (#1326): "skill references and rule files under ~/.claude no longer load in full". A full Read of the
+  // agent's own skill file over the trigger reaches the model whole; a project file of the same size still replaces.
+  test("D-R48-OWN-FILE-1: a full Read of a skill reference under ~/.claude is never replaced (#1326)", async () => {
+    const content = bigText(REPLACE_TRIGGER_BYTES * 3);
+    const n = content.split("\n").length;
+    const ref = join(root, ".claude", "skills", "deploy", "references", "api.md");
+    mkdirSync(join(ref, ".."), { recursive: true });
+    writeFileSync(ref, content);
+    const own = { filePath: ref, content, numLines: n, startLine: 1, totalLines: n };
+    const p = cc({ hook_event_name: "PostToolUse", tool_name: "Read", tool_input: { file_path: ref }, tool_use_id: "toolu_own", tool_response: { type: "text", file: own } });
+    assert.equal(parsed(await handleHook("claude-code", p, env)), null);
+    const proj = join(repo, "big.md");
+    const q = cc({ hook_event_name: "PostToolUse", tool_name: "Read", tool_input: { file_path: proj }, tool_use_id: "toolu_proj", tool_response: { type: "text", file: { ...own, filePath: proj } } });
+    assert.equal(typeof parsed(await handleHook("claude-code", q, env)).updatedToolOutput, "object", "a project file still replaces");
   });
 
   test("D-M7-RR-1: main-agent replace above SYNC_INDEX_MAX_BYTES: in-memory selection, detached index", async () => {
@@ -1029,6 +1045,36 @@ describe("PRD-v2 section 10: compaction delivery, recall and decision rows (GP6)
     // below threshold: an unrelated prompt adds nothing
     const off = await handleHook("claude-code", payload(s, { hook_event_name: "UserPromptSubmit", prompt: "what is the weather" }), env);
     assert.deepEqual(off, { stdout: "", exitCode: 0 });
+  });
+
+  // #1330 (Lcstyle, aron-intframe): the first prompt is 30 KB of the README; a later output holds README lines and
+  // one line the next question is about. The recall query is the current prompt only (D-1330-RECALL-PROMPT-1).
+  test("[M7] recall/long-first-prompt (#1330): the asked-for line ranks first, well inside the hook timeout", async () => {
+    const s = sid();
+    const readme = readFileSync(join(import.meta.dirname, "..", "README.md"), "utf8");
+    await handleHook("claude-code", payload(s, { hook_event_name: "UserPromptSubmit", prompt: readme.slice(0, 30000) }), env);
+    const PLANTED = "redis failover exhausted the connection pool after 37 retries on replica-2";
+    const pool = readme.split("\n").map((l) => l.trim()).filter((l) => l.length >= 20 && l.length <= 400);
+    const lines = [];
+    for (let i = 0, n = 0; n < SYNC_INDEX_MAX_BYTES - 2000; i++) {
+      const l = i === 60 ? PLANTED : pool[i % pool.length];
+      lines.push(l);
+      n += Buffer.byteLength(l, "utf8") + 1;
+    }
+    await handleHook("claude-code", payload(s, {
+      hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "cat build.log", description: "build log" },
+      tool_use_id: "toolu_1330", tool_response: { stdout: lines.join("\n"), stderr: "", interrupted: false, isImage: false },
+    }), env);
+    await waitRows("SELECT 1 FROM line_units WHERE session_id = ?", [s], lines.length);
+    await handleHook("claude-code", payload(s, { hook_event_name: "SessionStart", source: "compact" }), env);
+    const t0 = performance.now();
+    const text = context(await handleHook("claude-code", payload(s, { hook_event_name: "UserPromptSubmit", prompt: "why did redis failover exhaust the pool on replica-2" }), env));
+    const ms = performance.now() - t0;
+    assert.ok(ms < HOOK_TIMEOUT_MS / 2, "recall took " + Math.round(ms) + " ms");
+    assert.ok(text !== null, "no recall block");
+    const units = text.split("\n").filter((l) => l.startsWith("@"));
+    assert.ok(units.length > 0 && units[0].endsWith(" line 61:"), text); // the planted line is the first unit
+    assert.ok(text.includes(PLANTED), text);
   });
 
   test("[M7] recall/pending-flag row (gemini): state block on the first BeforeAgent, recall on a later one", async () => {
@@ -2330,6 +2376,28 @@ describe("PRD-v2 section 10: saving on live payload shapes", () => {
     const out = await handleHook("gemini", { session_id: "g1", transcript_path: "", cwd: repo, hook_event_name: "AfterTool", timestamp: "2026-11-05T00:00:00Z",
       tool_name: "read_file", tool_input: { file_path: path.join(repo, "logs", "app.log"), offset: 0, limit: 4000 }, tool_response: { llmContent: big, returnDisplay: big } }, env);
     assert.deepEqual(out, { stdout: "", exitCode: 0 });
+  });
+
+  // D-R47-READ-MEDIA-1 (#1321, #1324): an image read result is an image block, never a ctx_search pointer.
+  // gemini-cli fileUtils.ts: read_file of an image returns llmContent {inlineData: {data, mimeType}}; pi read returns
+  // [{type:"text", text:"Read image file [image/png]"}, {type:"image", data, mimeType}] (pi-mono read.ts).
+  test("gemini AfterTool of an image read_file (inlineData) is not replaced (#1321)", async (t) => {
+    const { repo, env } = sandbox(t);
+    const data = Buffer.alloc(51571, 7).toString("base64");
+    for (const llmContent of [{ inlineData: { data, mimeType: "image/png" } }, [{ text: "x" }, { inlineData: { data, mimeType: "image/png" } }]]) {
+      const out = await handleHook("gemini", { session_id: "g2", transcript_path: "", cwd: repo, hook_event_name: "AfterTool", timestamp: "2026-11-07T00:00:00Z",
+        tool_name: "read_file", tool_input: { file_path: path.join(repo, "shot.png") }, tool_response: { llmContent, returnDisplay: "Read image file: shot.png" } }, env);
+      assert.deepEqual(out, { stdout: "", exitCode: 0 });
+    }
+  });
+
+  test("pi tool_result of an image `read` is not replaced (#1324)", async (t) => {
+    const { repo } = sandbox(t);
+    const { handlers, ctx } = await piHandlers(repo);
+    const input = { path: "shot.png" };
+    const r = await handlers.tool_result({ type: "tool_result", toolCallId: "c4", toolName: "read", input,
+      content: [{ type: "text", text: "Read image file [image/png]" }, { type: "image", data: Buffer.alloc(51571, 7).toString("base64"), mimeType: "image/png" }], isError: false, details: undefined }, ctx);
+    assert.equal(r, undefined);
   });
 
   test("copilot-cli postToolUse of a bounded `view` (view_range) is not replaced (#1314)", async (t) => {

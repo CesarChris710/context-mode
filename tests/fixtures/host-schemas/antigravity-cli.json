@@ -1,0 +1,63 @@
+{
+  "host": "antigravity-cli",
+  "source": "Google Antigravity CLI 2.0: hook contract for SessionStart, PreInvocation, PreToolUse, PostToolUse.",
+  "output": {
+    "PreToolUse": {
+      "title": "Antigravity CLI PreToolUse reply",
+      "type": "object",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "deny"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "overwrite": {
+          "type": "object"
+        }
+      }
+    },
+    "PostToolUse": {
+      "title": "Antigravity CLI PostToolUse reply",
+      "type": "object"
+    },
+    "UserPromptSubmit": {
+      "title": "Antigravity CLI UserPromptSubmit reply",
+      "type": "object",
+      "properties": {
+        "injectSteps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ephemeralMessage": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "SessionStart": {
+      "title": "Antigravity CLI SessionStart reply",
+      "type": "object",
+      "properties": {
+        "injectSteps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ephemeralMessage": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

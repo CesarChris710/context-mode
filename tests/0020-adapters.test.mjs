@@ -20,8 +20,9 @@ import * as pi from "../src/adapters/pi.ts";
 import * as opencode from "../src/adapters/opencode.ts";
 import * as antigravity from "../src/adapters/antigravity.ts";
 import { CLIENT_NAME_TO_PLATFORM } from "../src/core/contracts/client-map.ts";
+import { HOST_SHAPES, replyErrors, shapeErrors } from "../src/core/ops/hook-shape.ts";
 import { spawnSync } from "node:child_process";
-import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -563,6 +564,22 @@ describe("ADR-0020 adapters", () => {
       assert.equal(r.stdout, "");
     });
 
+    // #1323: the reporter's repro through the hook entry: exit 0, empty reply, nothing on stderr, no hook-errors.log line.
+    test("hook entry: codex Stop (#1323 reporter payload) -> empty reply, no decode error, no hook-errors.log line", () => {
+      const data = mkdtempSync(join(tmpdir(), "cm-codex-stop-"));
+      try {
+        const payload = { hook_event_name: "Stop", session_id: "stop-hook-check", cwd: "/tmp", stop_hook_active: false };
+        const env = { PATH: process.env.PATH, HOME: data, USERPROFILE: data, CONTEXT_MODE_DATA_DIR: data };
+        const r = spawnSync(process.execPath, [HOOK_ENTRY, "--agent", "codex"], { input: JSON.stringify(payload), encoding: "utf8", env });
+        assert.equal(r.status, 0, r.stderr);
+        assert.equal(r.stdout, "");
+        assert.equal(r.stderr, "");
+        assert.equal(existsSync(join(data, "hook-errors.log")), false, "hook-errors.log was written");
+      } finally {
+        rmSync(data, { recursive: true, force: true });
+      }
+    });
+
     test("hook entry fails open: unknown agent, missing agent, bad JSON, unknown event, unbuilt adapter", () => {
       const cases = [
         [["--agent", "nope"], "{}"],
@@ -802,8 +819,24 @@ describe("ADR-0020 adapters", () => {
       assert.equal(bad.result.isError, true);
     });
 
+    // #1323: "codex: unknown hook event Stop" on each completed turn (Codex 0.166.0-alpha.6, context-mode 2.1.4).
+    const REPORTER_STOP = { hook_event_name: "Stop", session_id: "stop-hook-check", cwd: "/tmp", stop_hook_active: false };
+    // Codex rust-v0.166.0 hooks/schema/generated/stop.command.input.schema.json: every required field.
+    const CODEX_166_STOP = { ...base, hook_event_name: "Stop", stop_hook_active: false, last_assistant_message: "done" };
+
+    test("decode Stop (#1323): the reporter's payload and the Codex 0.166 Stop payload decode as Stop", () => {
+      assert.deepEqual(decode(REPORTER_STOP), { event: "Stop", agent: "codex", sessionId: "stop-hook-check", cwd: "/tmp" });
+      assert.deepEqual(decode(CODEX_166_STOP), { event: "Stop", agent: "codex", sessionId: "c-1", cwd: "/tmp/proj" });
+    });
+
+    test("encode on Stop is the empty reply for every decision (#1323)", () => {
+      for (const d of [{ kind: "allow" }, { kind: "hint", text: "x", onceKey: "k" }, { kind: "replace", output: "x" }]) {
+        assert.deepEqual(encode(decode(REPORTER_STOP), d), { stdout: "", exitCode: 0 });
+      }
+    });
+
     test("decode throws on unknown event names and non-object payloads", () => {
-      assert.throws(() => decode({ ...base, hook_event_name: "Stop" }));
+      assert.throws(() => decode({ ...base, hook_event_name: "SubagentStop" }));
       assert.throws(() => decode({ ...base, hook_event_name: "PreCompact" }));
       assert.throws(() => decode(undefined));
       assert.throws(() => decode([1]));
@@ -1109,11 +1142,12 @@ describe("ADR-0020 adapters", () => {
       const text = FX.AfterTool.tool_response.llmContent;
       assert.deepEqual(ok.result, { isError: false, bytes: Buffer.byteLength(text), text });
       // D-R38-GEMINI-PARTS-1: a text-only Part list is the joined text; a Part list with a non-text Part stays JSON text.
+      // D-R47-READ-MEDIA-1 (#1321): an inlineData Part is media, so the result keeps the host's own shape (keep: true).
       const parts = { llmContent: [{ text: "a" }, { text: "b" }], returnDisplay: "ab" };
       assert.deepEqual(decode({ ...FX.AfterTool, tool_response: parts }).result, { isError: false, bytes: 2, text: "ab" });
       const mixed = { llmContent: [{ text: "a" }, { inlineData: { mimeType: "image/png", data: "x" } }], returnDisplay: "a" };
       const mj = JSON.stringify(mixed);
-      assert.deepEqual(decode({ ...FX.AfterTool, tool_response: mixed }).result, { isError: false, bytes: Buffer.byteLength(mj), text: mj });
+      assert.deepEqual(decode({ ...FX.AfterTool, tool_response: mixed }).result, { isError: false, bytes: Buffer.byteLength(mj), text: mj, keep: true });
       const bad = decode({ ...FX.AfterTool, tool_response: { llmContent: "", returnDisplay: "", error: { message: "boom" } } });
       assert.equal(bad.result.isError, true);
       const nullErr = decode({ ...FX.AfterTool, tool_response: { llmContent: "x", error: null } });
@@ -2088,6 +2122,71 @@ describe("ADR-0020 adapters", () => {
 
       const post = { event: "PostToolUse", agent: "antigravity-cli", sessionId: "s", cwd: "/w" };
       assert.deepEqual(agyEncode(post, { kind: "hint", text: "ignored", onceKey: "k" }), { stdout: "{}", exitCode: 0 });
+
+  // D-HOST-SCHEMAS-1: tests/fixtures/host-schemas/<agent>.json holds each host's own hook reply rules, read from the host
+  // source named in the file. Every encode reply on representative events must be empty or valid for its host and event.
+  describe("ADR-0020 host reply shapes (tests/fixtures/host-schemas)", () => {
+    const tool = { name: "Bash", canonicalName: "Bash", input: { command: "ls" } };
+    const events = {
+      PreToolUse: { event: "PreToolUse", sessionId: "s", cwd: "/tmp/p", turn: 0, tool },
+      PostToolUse: { event: "PostToolUse", sessionId: "s", cwd: "/tmp/p", turn: 0, tool, result: { isError: false, bytes: 9, text: "x", shape: { stdout: "x", stderr: "", interrupted: false } } },
+      UserPromptSubmit: { event: "UserPromptSubmit", sessionId: "s", cwd: "/tmp/p", turn: 0, prompt: "p" },
+      SessionStart: { event: "SessionStart", sessionId: "s", cwd: "/tmp/p", turn: 0, source: "startup" },
+    };
+    const decisions = [
+      { kind: "allow" }, { kind: "hint", text: "prefer ctx_execute", onceKey: "k" }, { kind: "deny", reason: "why" },
+      { kind: "deny", reason: "why", rewritten: "node /x/run.mjs" }, { kind: "replace", output: "x" },
+    ];
+
+    test("every agent has a host-schemas file with a reply schema for each of the four events", () => {
+      for (const id of AGENT_IDS) {
+        for (const event of Object.keys(events)) assert.ok(HOST_SHAPES[id].output[event] !== undefined, `${id} ${event}`);
+      }
+    });
+
+    test("every encode reply of every agent is empty or valid for its host's reply schema", () => {
+      for (const id of AGENT_IDS) {
+        for (const [event, ev] of Object.entries(events)) {
+          for (const d of decisions) {
+            if (d.kind === "deny" && event !== "PreToolUse") continue; // deny is a PreToolUse decision only (policy/decide.ts, dispatch caseB)
+            const out = getAdapter(id).encode({ ...ev, agent: id }, d);
+            if (out.stdout === "") continue;
+            assert.deepEqual(replyErrors(id, event, out.stdout), [], `${id} ${event} ${d.kind}: ${out.stdout}`);
+          }
+        }
+      }
+    });
+
+    test("the checker finds an unknown key, a value outside an enum, a missing required key and stdout that is not JSON", () => {
+      assert.deepEqual(replyErrors("claude-code", "PreToolUse", JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "block" } })),
+        ['$.hookSpecificOutput.permissionDecision: "block" is not one of ["allow","deny","ask","defer"]']);
+      assert.deepEqual(replyErrors("zcode", "SessionStart", JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", permissionDecision: "deny" } })),
+        ["$.hookSpecificOutput: permissionDecision is not a known key"]);
+      assert.deepEqual(replyErrors("copilot-cli", "PostToolUse", JSON.stringify({ modifiedResult: { textResultForLlm: "x" } })), ["$.modifiedResult: resultType is required"]);
+      assert.deepEqual(replyErrors("qwen", "PreToolUse", JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse" } })),
+        ['$.hookSpecificOutput.hookEventName: "PostToolUse" is not "PreToolUse"']);
+      assert.deepEqual(replyErrors("gemini", "PreToolUse", "deny"), ["gemini PreToolUse: stdout is not JSON"]);
+      assert.deepEqual(replyErrors("pi", "PreToolUse", "plain reason"), []);
+    });
+
+    test("the checker throws on a keyword it does not read, so no fixture rule goes unchecked", () => {
+      assert.throws(() => shapeErrors({ type: "string", pattern: "x" }, "x"), /keyword pattern/);
+    });
+
+    test("the checker and ajv agree on the Codex 0.166 schemas, for encode replies and for broken replies", async () => {
+      const { default: Ajv } = await import("ajv");
+      const ajv = new Ajv({ strict: false });
+      const broken = [
+        { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "block" } }, { hookSpecificOutput: { additionalContext: "x" } },
+        { hookSpecificOutput: { hookEventName: "SessionStart", extra: 1 } }, { decision: "allow" }, { continue: "no" }, { unknown: true }, [], "x",
+      ];
+      for (const event of Object.keys(events)) {
+        const check = ajv.compile(HOST_SHAPES.codex.output[event]);
+        const replies = decisions.map((d) => getAdapter("codex").encode({ ...events[event], agent: "codex" }, d).stdout).filter((s) => s !== "").map((s) => JSON.parse(s));
+        for (const v of [...replies, ...broken]) {
+          assert.equal(shapeErrors(HOST_SHAPES.codex.output[event], v).length === 0, check(v), `${event} ${JSON.stringify(v)}`);
+        }
+      }
     });
   });
 });

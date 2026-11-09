@@ -15,13 +15,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { claudeDirOf, codexDirOf, copilotDirOf, dataRootOf, geminiDirOf, kiroDirOf, opencodeDirOf } from "../core/project/config-dir.ts";
-import { AGENT_HOME_DIR, DB_FILE_NAME, NATIVE_INSTALL, OPENCODE_PLUGIN_PATH, PROJECTS_DIR_NAME, SERVER_KEY, TOOL_ORDER, UPGRADE_REPORT_ONLY_REASONS } from "../core/contracts/constants.ts";
-import { CtxError } from "../core/contracts/errors.ts";
+import { AGENT_HOME_DIR, D2_NODE_DETAIL, D2_NODE_FIX, D2_SQLITE_DETAIL, D2_SQLITE_FIX, DB_FILE_NAME, MCP_ENV_FIELD, MCP_ENV_VARS_FIELD, SETUP_MANIFEST_FILE, NATIVE_INSTALL, OPENCODE_PLUGIN_PATH, PROJECTS_DIR_NAME, SERVER_KEY, TOOL_ORDER, UPGRADE_REPORT_ONLY_REASONS } from "../core/contracts/constants.ts";
+import { CtxError, formatError } from "../core/contracts/errors.ts";
+import { nodeTooOld } from "../core/hooks/fallback.ts";
 import { ADAPTERS, getAdapter } from "../adapters/table.ts";
 import type { AgentId, HostConfigFormat, V1Finding } from "../core/contracts/types.ts";
 import { detectV1 } from "../core/ops/detect-v1.ts";
 import { atomicWriteFile, renameWithRetry, unlinkWithRetry } from "../core/ops/atomic-file.ts";
-import { editHostConfigText, parseHostConfig } from "../core/ops/host-config.ts";
+import { editHostConfigText, hostConfigValueAt, parseHostConfig } from "../core/ops/host-config.ts";
 import { hostLayout, hostText, withLayout } from "../core/ops/host-text.ts";
 import { AGENT_FLAG, BACKUP_DIR, COMMAND_SKILLS, HOOK_BUNDLE, LOCK_FILE, SKILL_FILE, assertWritable, buildRegistry, configEdits, hookCommandString, renderSkill } from "./registry.ts";
 import type { CheckRow, HookFile, HookInstall, NativePlugin, SetupContext } from "./registry.ts";
@@ -40,7 +41,7 @@ const HOOK_ROUNDS = 5; // noise only adds time: a real overhead over budget fail
 const P95 = 0.95;
 const VERIFY_TIMEOUT_MS = 10_000;
 const INSTALL_TIMEOUT_MS = 120_000; // D-SETUP-SLOW-1: a first run of an agent CLI can unpack its own package before `mcp add` answers
-const MANIFEST = "manifest.json";
+const MANIFEST = SETUP_MANIFEST_FILE;
 const MANIFEST_DONE = "manifest.removed.json";
 const FILES = "files";
 const V1_HOOK_MARK = "context-mode hook";
@@ -56,6 +57,8 @@ export interface AgentResult {
 export interface SetupResult { exitCode: number; agents: AgentResult[]; backupDir?: string; error?: string; }
 export interface SetupOptions extends SetupContext {
   agents?: AgentId[]; runId?: string; dryRun?: boolean;
+  /** #1328 D-NODE-OLD-1: the Node that runs setup and the server it writes (default process.version). */
+  nodeVersion?: string;
   /** D7 Ctrl-C: on abort the agent in progress is rolled back and the lock released, synchronously. */
   signal?: AbortSignal;
   /** Live checklist: called before and after each agent. */
@@ -125,7 +128,8 @@ export function installExitOk(status: number | null, listed: boolean, platform: 
 
 /** Runs an agent CLI found on PATH; a Windows .cmd/.bat shim goes through cmd.exe (spawnForm). */
 function runBin(bin: string, args: string[], env: SetupContext["env"], input?: string, timeout = VERIFY_TIMEOUT_MS): ReturnType<typeof spawnSync> {
-  return spawnShim(hostBin(bin, env).file ?? bin, args, env, { encoding: "utf8", input, timeout }) as ReturnType<typeof spawnSync>;
+  // D-1322-LIST-SIZE-1: no output cap; a host list can be megabytes (codex 0.165.0 printed 2.16 MB, the 1 MiB default cut it).
+  return spawnShim(hostBin(bin, env).file ?? bin, args, env, { encoding: "utf8", input, timeout, maxBuffer: Infinity }) as ReturnType<typeof spawnSync>;
 }
 
 /** CC-WIN-3: host file text as plain LF without a BOM (PowerShell 5 writes both); apply gives the layout back. */
@@ -352,7 +356,7 @@ function planRow(row: CheckRow, listed: boolean, stale: boolean, env: SetupConte
     const c = row.config;
     const before = readOr(c.file);
     let res;
-    try { res = editHostConfigText(row.id, c.file, before ?? "", c.format, configEdits(c)); }
+    try { res = editHostConfigText(row.id, c.file, before ?? "", c.format, ownConfigEdits(row, c, before ?? "")); }
     catch (e) { if (e instanceof CtxError) throw new Error(parseFail(row, c.file)); throw e; }
     if (res.edits.length) edits.push({ file: c.file, before, after: res.text, changes: res.edits.map((e) => ({ file: c.file, ...e })) });
   }
@@ -361,7 +365,7 @@ function planRow(row: CheckRow, listed: boolean, stale: boolean, env: SetupConte
   planSkills(row, edits);
   const cli = row.config || !row.cli || listed ? [] : row.cli.install;
   // D-US-1: a listed plugin whose copy is older than the package gets the host's own update command, not a reinstall.
-  const refresh = listed && stale && row.copy ? [row.copy.refresh] : [];
+  const refresh = listed && stale && row.copy ? [row.copy.marketplace, row.copy.refresh] : []; // #1338: `plugin update` reads the marketplace listing, so that is refreshed first
   // D-CC-HOOKS-RUN-1: a listed but disabled plugin runs no hooks; the host's own enable command turns it on.
   if (listed && disabled && row.copy) refresh.push(row.copy.enable);
   return { edits, cli, refresh };
@@ -489,8 +493,13 @@ function packageVersion(pkgDir: string): string | undefined {
   } catch { return undefined; }
 }
 
-/** D-US-1: a host that runs a copy of the package must run the installed version. No record, no check: list covers it. */
-function copyCheck(row: CheckRow, pkgDir: string): Check | undefined {
+/** #1338: the two host commands that renew the copy, with the env words of the profile setup found (CLAUDE_CONFIG_DIR). */
+function copyFix(c: NonNullable<CheckRow["copy"]>): string {
+  return `${c.profile}${c.bin} ${c.marketplace.join(" ")} && ${c.profile}${c.bin} ${c.refresh.join(" ")}`;
+}
+
+/** The recorded copy version that differs from the package, when there is one. */
+function staleCopy(row: CheckRow, pkgDir: string): { old: string; pkg: string } | undefined | Check {
   const c = row.copy;
   const pkg = packageVersion(pkgDir);
   const text = c ? readOr(c.file) : undefined;
@@ -499,13 +508,38 @@ function copyCheck(row: CheckRow, pkgDir: string): Check | undefined {
   try {
     const doc: unknown = JSON.parse(text);
     entries = isObj(doc) && isObj(doc.plugins) ? doc.plugins[c.plugin] : undefined;
-  } catch { return { name: "copy", ok: false, detail: `${c.file} is not valid JSON; run ${c.bin} ${c.refresh.join(" ")}` }; }
+  } catch { return { name: "copy", ok: false, detail: `${c.file} is not valid JSON; run ${copyFix(c)}` }; }
   if (!Array.isArray(entries)) return undefined;
   const versions = entries.filter(isObj).map((e) => e.version).filter((v): v is string => typeof v === "string");
   if (!versions.length) return undefined;
   const old = versions.find((v) => v !== pkg);
-  if (old === undefined) return { name: "copy", ok: true };
-  return { name: "copy", ok: false, detail: `${c.host} runs context-mode ${old}, the installed package is ${pkg}; run ${c.bin} ${c.refresh.join(" ")}` };
+  return old === undefined ? { name: "copy", ok: true } : { old, pkg };
+}
+
+/** D-US-1: a host that runs a copy of the package must run the installed version. No record, no check: list covers it. */
+function copyCheck(row: CheckRow, pkgDir: string): Check | undefined {
+  const r = staleCopy(row, pkgDir);
+  if (r === undefined || "name" in r) return r;
+  const c = row.copy as NonNullable<CheckRow["copy"]>;
+  return { name: "copy", ok: false, detail: `${c.host} runs context-mode ${r.old}, the installed package is ${r.pkg}; run ${copyFix(c)}` };
+}
+
+/** #1338: setup ran the host's own update and the copy is still old. The good install stays: a WARN with the exact commands. */
+function copyWarn(row: CheckRow, pkgDir: string, refreshNotes: string[]): Check | undefined {
+  const r = staleCopy(row, pkgDir);
+  if (r === undefined || "name" in r) return undefined;
+  const c = row.copy as NonNullable<CheckRow["copy"]>;
+  const why = refreshNotes.length ? ` (${refreshNotes.join("; ")})` : "";
+  return { name: "copy", ok: true, warn: true, detail: `${c.host} still runs context-mode ${r.old}, the installed package is ${r.pkg}${why}; run ${copyFix(c)}` };
+}
+
+// #1328 D-NODE-OLD-1: a server that lists only ctx_doctor runs in degraded mode (server.ts isDegraded): its Node is
+// below NODE_MIN, or node:sqlite failed to load. Ask that same node binary for its version to name the cause.
+function degradedDetail(node: string, env: SetupContext["env"]): string {
+  const r = spawnSync(node, ["-p", "process.version"], { env, encoding: "utf8", timeout: VERIFY_TIMEOUT_MS, windowsHide: true });
+  const v = `${r.stdout ?? ""}`.trim();
+  if (v && nodeTooOld(v)) return `Node too old: ${D2_NODE_DETAIL(v)}. Fix: ${D2_NODE_FIX}`;
+  return `only ctx_doctor is served: ${D2_SQLITE_DETAIL} under ${node}${v ? ` ${v}` : ""}. Fix: ${D2_SQLITE_FIX}`;
 }
 
 function mcpCheck(cmd: string[], env: SetupContext["env"]): Promise<Check> {
@@ -539,7 +573,7 @@ function mcpCheck(cmd: string[], env: SetupContext["env"]): Promise<Check> {
           const want = [...TOOL_ORDER].sort();
           const got = [...tools].sort();
           const ok = JSON.stringify(got) === JSON.stringify(want);
-          done(ok, ok ? undefined : `tools/list returned ${got.join(",")}, expected ${want.join(",")}`);
+          done(ok, ok ? undefined : got.length === 1 && got[0] === "ctx_doctor" ? degradedDetail(cmd[0], env) : `tools/list returned ${got.join(",")}, expected ${want.join(",")}`);
         }
       }
     });
@@ -586,11 +620,28 @@ function hookCheck(row: CheckRow, env: SetupContext["env"]): Check {
   return best as Check;
 }
 
+/** #1327 D-1327-CODEX-ENV-1: the config edits for a row, with the env table and env_vars list the user keeps on the codex
+ *  MCP entry (other vars, Codex forwards these to the server) merged in; setup sets only its own CODEX_HOME key. */
+function ownConfigEdits(row: CheckRow, c: NonNullable<CheckRow["config"]>, text: string): [readonly string[], unknown][] {
+  const edits = configEdits(c);
+  if (row.id !== "codex" || !isObj(c.value)) return edits;
+  let cur: unknown;
+  try { cur = hostConfigValueAt(parseHostConfig(row.id, c.file, text, c.format), c.key); } catch { return edits; }
+  if (!isObj(cur)) return edits;
+  const value: Json = { ...c.value };
+  const userEnv = cur[MCP_ENV_FIELD];
+  const ownEnv = value[MCP_ENV_FIELD];
+  if (isObj(userEnv) || isObj(ownEnv)) value[MCP_ENV_FIELD] = { ...(isObj(userEnv) ? userEnv : {}), ...(isObj(ownEnv) ? ownEnv : {}) };
+  if (Array.isArray(cur[MCP_ENV_VARS_FIELD])) value[MCP_ENV_VARS_FIELD] = cur[MCP_ENV_VARS_FIELD];
+  return [[c.key, value], ...edits.slice(1)];
+}
+
 function parseCheck(row: CheckRow): Check {
   const c = row.config;
   if (!c) return { name: "parse", ok: true };
   try {
-    const r = editHostConfigText(row.id, c.file, readOr(c.file) ?? "", c.format, configEdits(c));
+    const text = readOr(c.file) ?? "";
+    const r = editHostConfigText(row.id, c.file, text, c.format, ownConfigEdits(row, c, text));
     return { name: "parse", ok: r.edits.length === 0, detail: r.edits.length ? "entry differs after write" : undefined };
   } catch (e) { return { name: "parse", ok: false, detail: (e as Error).message }; }
 }
@@ -683,8 +734,6 @@ function skillsCheck(row: CheckRow, pkgDir: string): Check {
 
 // ---------- native plugin (D-NI-CODEX-DOCTOR-1) ----------
 
-const PLUGIN_ENABLED = "enabled";
-const WORD_TRIM = ",;";
 const CODEX_CONFIG_FILE = "config.toml";
 
 const EXT_ENABLED_USER = "Enabled (User):";
@@ -692,13 +741,18 @@ const EXT_ENABLED_WORKSPACE = "Enabled (Workspace):";
 const EXT_TRUE = "true";
 type NativeState = "enabled" | "disabled" | undefined;
 /** The extension list also shows the workspace scope: off there, gemini runs none of its hooks (D-NI-GEMINI-GATE-1). */
-interface NativeStatus { state: NativeState; workspaceOff: boolean; hookGate?: string }
+/** stopped: the list command ended early (signal or spawn error) after it named the plugin (D-1322-LIST-SIZE-1). */
+interface NativeStatus { state: NativeState; workspaceOff: boolean; hookGate?: string; stopped?: string }
 
-/** codex plugin list: the table row that names the plugin, enabled when one of its words is "enabled". */
-function tableState(n: NativePlugin, text: string): NativeState {
-  const line = text.split("\n").find((l) => l.split(" ").includes(n.plugin));
-  if (line === undefined) return undefined;
-  return line.split(" ").map((w) => trimChars(w, WORD_TRIM)).includes(PLUGIN_ENABLED) ? "enabled" : "disabled";
+/** D-1322-LIST-SIZE-1, codex plugin list --json (codex-rs/cli/src/plugin_cmd.rs JsonPluginListOutput): { installed: [{ pluginId,
+ *  enabled }], available: [] }. Without --available only installed plugins are listed, so the output stays small. */
+function codexJsonState(n: NativePlugin, text: string): NativeState {
+  let doc: unknown;
+  try { doc = JSON.parse(text); } catch { return undefined; }
+  const list = isObj(doc) && Array.isArray(doc.installed) ? doc.installed : [];
+  const mine = list.find((p) => isObj(p) && p.pluginId === n.plugin);
+  if (!isObj(mine)) return undefined;
+  return mine.enabled === true ? "enabled" : "disabled";
 }
 
 /** qwen 0.26.1 / gemini 0.65.0 extensions list: a block per extension. A header line starts in column 0 ("<mark> <name>
@@ -746,10 +800,17 @@ function nativeState(row: CheckRow, env: SetupContext["env"]): NativeStatus {
   const n = row.nativePlugin;
   if (!n || !hostBin(n.bin, env).file) return none;
   const r = runBin(n.bin, n.args, env);
+  // D-1322-LIST-SIZE-1: a list that stopped after it named the plugin is the host's install; the old setup path is no fix.
+  const why = (r.error as NodeJS.ErrnoException | undefined)?.code ?? r.signal;
+  if (why && `${r.stdout}`.includes(n.plugin)) {
+    const cmd = [n.bin, ...n.args].join(" ");
+    return { ...none, stopped: `${cmd} stopped before it finished (${why}); it names ${n.plugin}, run ${cmd} in a terminal` };
+  }
   if (r.status !== 0) return none;
   // Gemini 0.65.0 writes the extension list to stderr (D-INST-2).
   if (n.format === "json") return jsonState(n, `${r.stdout}`);
-  return n.format === "extension" ? extensionState(n, `${r.stdout}${r.stderr}`) : { state: tableState(n, `${r.stdout}`), workspaceOff: false };
+  if (n.format === "codex-json") return { state: codexJsonState(n, `${r.stdout}`), workspaceOff: false };
+  return extensionState(n, `${r.stdout}${r.stderr}`);
 }
 
 /** The row as the host's own plugin install sets it up. */
@@ -758,21 +819,14 @@ function nativeRow(row: CheckRow, n: NativePlugin): CheckRow {
     hookInstall: { kind: "package", via: n.hooksVia }, skillInstall: { kind: "package", via: n.skillsVia } };
 }
 
-function trimChars(w: string, chars: string): string {
-  let a = 0;
-  let b = w.length;
-  while (a < b && chars.includes(w.charAt(a))) a++;
-  while (b > a && chars.includes(w.charAt(b - 1))) b--;
-  return w.slice(a, b);
-}
-
 /** A native plugin install: verify it as is, write nothing (a second hook copy under HOME would run twice). A listed but
  *  disabled extension is a FAIL that names the host's enable command: setup cannot link over it (D-NI-EXT-DOCTOR-1). */
 async function nativeResult(row: CheckRow, ctx: SetupContext, apply?: { run: Run; dryRun: boolean }): Promise<AgentResult | undefined> {
   const n = row.nativePlugin;
-  const { state, workspaceOff, hookGate } = nativeState(row, ctx.env);
+  const { state, workspaceOff, hookGate, stopped } = nativeState(row, ctx.env);
+  const bin = n ? hostBin(n.bin, ctx.env).file : undefined;
+  if (stopped) return { id: row.id, status: "FAIL", v1: [], changes: [], checks: [], bin, reason: stopped };
   if (!n || state === undefined) return undefined;
-  const bin = hostBin(n.bin, ctx.env).file;
   if (state === "disabled") {
     if (!n.enable) return undefined;
     return { id: row.id, status: "FAIL", v1: [], changes: [], checks: [], bin,
@@ -989,7 +1043,10 @@ export async function runSetup(opts: SetupOptions): Promise<SetupResult> {
   const ctx: SetupContext = { home: opts.home, pkgDir: opts.pkgDir, env: opts.env };
   const runId = opts.runId ?? new Date().toISOString().split(":").join("-").split(".").join("-");
   const reg = buildRegistry(ctx);
-  // preflight
+  // preflight. #1328 D-NODE-OLD-1: Node first. Below NODE_MIN the server serves only ctx_doctor, so every agent
+  // would fail verify and roll back; one line names the cause and the fix instead.
+  const nodeVersion = opts.nodeVersion ?? process.version;
+  if (nodeTooOld(nodeVersion)) return { exitCode: 1, agents: [], error: formatError("NODE_TOO_OLD", { v: nodeVersion }) };
   for (const f of ["server.mjs", "hook.mjs"]) {
     if (!existsSync(path.join(ctx.pkgDir, f))) return { exitCode: 1, agents: [], error: `preflight: ${path.join(ctx.pkgDir, f)} is missing` };
   }
@@ -1059,13 +1116,21 @@ async function setupRow(row: CheckRow, ctx: SetupContext, run: Run, dryRun: bool
       if (!installExitOk(r.status, r.status === WIN_EXIT_CRASH && listCheck(row, ctx.env)?.ok === true)) throw new Error(`${row.cli!.bin} ${args.join(" ")} exited ${r.status}: ${`${r.stderr}`.trim()}`);
     }
     if (plan.cli.length) for (const args of row.cli!.remove) run.record({ agent: row.id, undo: { bin: row.cli!.bin, args } });
+    const refreshNotes: string[] = [];
     for (const args of plan.refresh) { // a refresh is not an install: recorded, never undone
       const r = runBin(row.cli!.bin, args, ctx.env, undefined, INSTALL_TIMEOUT_MS);
-      if (r.status !== 0) throw new Error(`${row.cli!.bin} ${args.join(" ")} exited ${r.status}: ${`${r.stderr}`.trim()}`);
+      const failed = `${row.cli!.bin} ${args.join(" ")} exited ${r.status}: ${`${r.stderr}`.trim()}`;
+      // #1338: a copy refresh that cannot run leaves the good install in place; the copy check below ends in a WARN.
+      if (r.status !== 0 && !isCopyRefresh(row, args)) throw new Error(failed);
+      if (r.status !== 0) { refreshNotes.push(failed); continue; }
       run.record({ agent: row.id, ran: { bin: row.cli!.bin, args } });
     }
     res.changes.push(...await enableCopilotHooks(row, ctx, run));
     res.checks = await verifyRow(row, ctx);
+    if (plan.refresh.length) { // the re-check: a copy that is still old after the host's update
+      const w = copyWarn(row, ctx.pkgDir, refreshNotes);
+      if (w) res.checks = res.checks.map((c) => (c.name === "copy" ? w : c));
+    }
     const bad = res.checks.filter((c) => !c.ok);
     if (bad.length) throw new Error(bad.map((c) => `${c.name}: ${c.detail}`).join("; "));
   } catch (e) {
@@ -1140,7 +1205,13 @@ function isRefresh(row: CheckRow, c: Change): boolean {
   const r = row.copy;
   if (r === undefined || c.command === undefined) return false;
   const cmd = c.command.join(" ");
-  return cmd === [r.bin, ...r.refresh].join(" ") || cmd === [r.bin, ...r.enable].join(" "); // D-CC-HOOKS-RUN-1
+  return isCopyRefresh(row, c.command.slice(1)) || cmd === [r.bin, ...r.enable].join(" "); // D-CC-HOOKS-RUN-1
+}
+/** #1338: the marketplace update and the plugin update that renew a stale copy. */
+function isCopyRefresh(row: CheckRow, args: string[]): boolean {
+  const r = row.copy;
+  const a = args.join(" ");
+  return r !== undefined && (a === r.refresh.join(" ") || a === r.marketplace.join(" "));
 }
 function isTrust(row: CheckRow, c: Change): boolean {
   const h = row.hookInstall;
